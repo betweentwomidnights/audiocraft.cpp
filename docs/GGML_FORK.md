@@ -25,6 +25,60 @@ upstream bump could disturb:
 | `ggml_rope_ext` (NeoX) | MelodyFlow DiT positional embedding |
 | `ggml_flash_attn_ext` | optional attention path (`AC_FLASH_ATTN`) |
 
+## Open: every F32 GEMM on CUDA silently runs at TF32
+
+`ggml_backend_cuda_context::cublas_handle` creates its cuBLAS handle with
+
+```cpp
+CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH));
+```
+
+(`ggml/src/ggml-cuda/common.cuh`). TF32 keeps 10 mantissa bits -- about half precision --
+so on Ampere and later *every* F32 matmul that reaches cuBLAS is computed at roughly F16
+accuracy, whatever the tensors say.
+
+This is upstream ggml, not a fork patch: `git log -L` dates the line to the 2024-03-27
+"sync : adapt to CUDA changes" commit. It is presumably a deliberate trade for language
+models. It is not a good trade for a deep convolutional audio codec.
+
+**There is no way to opt out from the calling side.** `ggml_mul_mat_set_prec(GGML_PREC_F32)`
+and the `GGML_CUDA_CUBLAS_COMPUTE_TYPE=f32` environment variable both only select
+`CUBLAS_COMPUTE_32F`, which the handle's math mode then downgrades anyway. Measured: both
+leave the output bit-identical.
+
+Measured on an RTX 5070 Laptop against float32 torch, with a one-line local patch gating the
+math mode on an environment variable:
+
+| | TF32 on (today) | TF32 off | cost |
+|---|---|---|---|
+| MelodyFlow VAE encoder, 30 s | cossim 0.9998489, err 8.2e-01 | **1.0000000**, err 2.9e-05 | 0.408 s -> 0.448 s (+10%) |
+| MelodyFlow DiT F32, 750 frames | 0.9999958 | 0.9999975 | 0.227 s -> 0.305 s (+34%) |
+| MelodyFlow DiT F16, 750 frames | 0.9999286 | **0.9999768** | 0.225 s -> 0.228 s (free) |
+
+The VAE encoder is the one that matters: with TF32 on it fails this repo's 0.9999 parity
+gate, and the error is the same magnitude as the F16-im2col bug documented in
+[MELODYFLOW_VAE.md](MELODYFLOW_VAE.md) -- sixteen stacked convolutions accumulate it. For the
+DiT, turning TF32 off is free at F16 and buys a 3x smaller error.
+
+The patch that produced those numbers, for whoever picks this up:
+
+```cpp
+// ggml/src/ggml-cuda/common.cuh, in cublas_handle(int device)
+CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device],
+    getenv("GGML_CUDA_TF32") && getenv("GGML_CUDA_TF32")[0] == '0'
+        ? CUBLAS_DEFAULT_MATH : CUBLAS_TF32_TENSOR_OP_MATH));
+```
+
+It is deliberately **not** applied to the pinned submodule. Changing the shared fork means
+following the pin policy below -- build and test every backend, push the branch, move the
+gitlink -- and it would change `sa3.cpp`'s numerics too, so it is a decision for the fork
+owner rather than something to slip in. It is also worth raising upstream: any ggml consumer
+running convolutions or long accumulation chains in F32 on CUDA is affected and has no way
+to know.
+
+Until then, CUDA results in this repo are reported with TF32 on, which is what a fresh clone
+produces.
+
 ## Pin policy
 
 Same policy as `sa3.cpp`, and for the same reason:

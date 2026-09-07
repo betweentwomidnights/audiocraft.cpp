@@ -136,6 +136,9 @@ if(AC_BUILD_TOOLS)
 
     add_executable(ac-vae tools/ac-vae.cpp)
     target_link_libraries(ac-vae PRIVATE ac)
+
+    add_executable(ac-dit tools/ac-dit.cpp)
+    target_link_libraries(ac-dit PRIVATE ac)
 endif()
 
 # --- tests -----------------------------------------------------------------
@@ -165,6 +168,16 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     target_link_libraries(lstm_test PRIVATE ac)
     add_test(NAME lstm COMMAND lstm_test)
     set_tests_properties(lstm PROPERTIES LABELS "non-gpu;shared")
+
+    add_executable(solver_test tests/solver_test.cpp)
+    target_link_libraries(solver_test PRIVATE ac)
+    add_test(NAME solver COMMAND solver_test)
+    set_tests_properties(solver PROPERTIES LABELS "non-gpu;melodyflow")
+
+    add_executable(dit_skip_test tests/dit_skip_test.cpp)
+    target_link_libraries(dit_skip_test PRIVATE ac)
+    add_test(NAME dit_skip COMMAND dit_skip_test)
+    set_tests_properties(dit_skip PROPERTIES LABELS "non-gpu;melodyflow")
 
     add_executable(seanet_shape_test tests/seanet_shape_test.cpp)
     target_link_libraries(seanet_shape_test PRIVATE ac)

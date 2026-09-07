@@ -67,6 +67,14 @@ Note `sa3.cpp`'s `sat/oobleck.h` calls `ggml_conv_1d` directly and so carries th
 rounding. It passes its own gate, but the same substitution is available if its numbers
 ever matter more.
 
+**The same error comes back on CUDA, from a different direction.** ggml creates its cuBLAS
+handle with `CUBLAS_TF32_TENSOR_OP_MATH`, so an F32 GEMM computes at ten mantissa bits and
+the encoder lands at cossim 0.9998489 / 8.2e-01 again — the same magnitude, for the same
+reason. Neither `ggml_mul_mat_set_prec` nor `GGML_CUDA_CUBLAS_COMPUTE_TYPE` can turn it off.
+Details, measurements and the one-line patch are in
+[GGML_FORK.md](GGML_FORK.md#open-every-f32-gemm-on-cuda-silently-runs-at-tf32); with it, the
+encoder returns to cossim 1.0000000 for about 10% more time.
+
 ### The bottleneck LSTM belongs in the graph
 
 ggml has no LSTM operation and the recurrence is genuinely sequential, so the obvious move
@@ -108,10 +116,14 @@ falsifiable.
 
 30 s stereo, F32 GGUF, CPU:
 
-| checkpoint | cossim | max abs err |
-|---|---:|---:|
-| `mf_vae_latent` — encoder `mean‖scale` [256, 750] | 1.0000000 | 3.2e-05 |
-| `mf_vae_audio` — decoder output [2, 1440000] | 1.0000000 | 2.0e-05 |
+| checkpoint | CPU cossim | CPU max abs err | CUDA cossim |
+|---|---:|---:|---:|
+| `mf_vae_latent` — encoder `mean‖scale` [256, 750] | 1.0000000 | 3.2e-05 | 0.9998489 |
+| `mf_vae_audio` — decoder output [2, 1440000] | 1.0000000 | 2.0e-05 | 0.9999998 |
+
+The CUDA encoder figure is the TF32 issue above, not a graph difference; with TF32 disabled
+it is 1.0000000. Encode takes 0.40 s and decode 0.47 s on an RTX 5070 Laptop, against
+2.57 s and 3.10 s on this CPU.
 
 Intermediate taps at 10 s, against the torch per-layer dump:
 

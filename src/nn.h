@@ -57,6 +57,12 @@ inline ggml_tensor* linear(ggml_context* ctx, ggml_tensor* w, ggml_tensor* x, gg
 // codecs here are F32 end to end: measured on MelodyFlow's encoder, the F16 im2col cost
 // ~0.0016 of cosine similarity against torch, which is 30x our parity gate.
 //
+// An F32 im2col is only half the fix. The matmul that consumes it must accumulate in F32
+// too: CUDA's mul_mat otherwise reaches for tensor cores and lands back at the same
+// ~8e-01 error on MelodyFlow's encoder latent that the F16 im2col produced. GGML_PREC_F32
+// is a no-op on CPU and costs about 20% on this GPU, which is the right trade for the one
+// place in the pipeline where sixteen stacked convolutions accumulate.
+//
 // The computation is otherwise identical to ggml_conv_1d. The cost is memory: the im2col
 // buffer is OL * IC * K floats, so callers working on long sequences should tile.
 // kernel is [K, IC, OC]; x is [T, IC]; returns [OL, OC].
@@ -68,6 +74,7 @@ inline ggml_tensor* conv_1d_f32(ggml_context* ctx, ggml_tensor* kernel, ggml_ten
         ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[1] * im2col->ne[2]),
         ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
+    ggml_mul_mat_set_prec(y, GGML_PREC_F32);
     return ggml_reshape_2d(ctx, y, im2col->ne[1], kernel->ne[2]);
 }
 

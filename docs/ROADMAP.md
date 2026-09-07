@@ -18,8 +18,8 @@ de-risking the shared SEANet/LSTM work before MusicGen's incremental-decode prob
 |---|---|---|---|
 | 0 | repo, ggml pin, shared headers, T5-base encoder + tokenizer | `ac-textenc` matches torch at cossim ≥ 0.9999 | **done** — F32 1.000000000, F16 0.999999934 ([docs/T5.md](T5.md)) |
 | 1 | `ac/seanet.h`, `ac/lstm.h`, MelodyFlow VAE (encode + decode) | VAE round-trip matches torch on 30 s stereo | **done** — encode and decode both cossim 1.0000000 ([docs/MELODYFLOW_VAE.md](MELODYFLOW_VAE.md)) |
-| 2 | MelodyFlow DiT (RoPE, `add_zero_attn`, additive timestep, U-ViT skips) | one velocity prediction at cossim ≥ 0.9999 | next |
-| 3 | sway schedule, euler/midpoint, CFG, regularized inversion | `mf-edit` reproduces terry's euler/25/0.12/2/1/0.2 | |
+| 2 | MelodyFlow DiT (RoPE, `add_zero_attn`, additive timestep, U-ViT skips) | one velocity prediction at cossim ≥ 0.9999 | **done** — F32 cossim 1.0000000 end to end ([docs/MELODYFLOW_DIT.md](MELODYFLOW_DIT.md)) |
+| 3 | sway schedule, euler/midpoint, CFG, regularized inversion | `mf-edit` reproduces terry's euler/25/0.12/2/1/0.2 | next |
 | 4 | MusicGen LM + KV cache + delay pattern + CFG + top-k | greedy 30 s generation matches token-for-token | |
 | 5 | EnCodec 32 kHz encode + decode | `mg-generate --continue` reproduces `generate_continuation` | |
 | 6 | `terry-server` :8002, `gary-server` :8000, quantized tiers, GGUF publication | drop-in for the Python services in gary4local | |
@@ -47,13 +47,23 @@ graph per direction on any backend. See [docs/MELODYFLOW_VAE.md](MELODYFLOW_VAE.
 parity gate. `nn::conv_1d_f32` is the same computation with an F32 im2col; the memory cost
 is a large transient buffer, which will want tiling for long inputs on small GPUs.
 
+**A fourth, found in Phase 2:** MelodyFlow's rotary frequency buffer has been round-tripped
+through bfloat16 in the checkpoint, and torch rotates with those rounded values. Recomputing
+the closed form does not match. The converter keeps the stored table and feeds it to
+`ggml_rope_ext` as `freq_factors` with `freq_base = 1`.
+
 ## Parity details that are easy to get wrong
 
 These produce plausible-but-wrong audio rather than an error, so they are called out here
 and asserted in tests where possible:
 
 - MelodyFlow's `add_zero_attn: true` prepends one all-zero key/value in **both** self- and
-  cross-attention, in every layer.
+  cross-attention, in every layer. It is not an optional attention sink: the unconditional
+  CFG branch masks every real key to `-inf`, so without it the softmax is NaN.
+- MelodyFlow's U-ViT skips pick their projection with `idx % n_skip`, which is not aligned
+  with the LIFO pairing and reuses two projections. Trained that way; do not tidy it.
+- The feed-forward GELU is the erf form (`F.gelu`, `approximate='none'`), not ggml's
+  default tanh approximation.
 - MelodyFlow's editing pass uses **`cfg_coef` 4.0**, the `FlowModel` constructor default —
   `get_dit_model` builds from `cfg.transformer_lm`, which carries no `cfg_coef`, so the
   checkpoint's `classifier_free_guidance.inference_coef: 3.0` is never read. The inversion
