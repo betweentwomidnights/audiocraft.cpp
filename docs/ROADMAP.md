@@ -17,8 +17,8 @@ de-risking the shared SEANet/LSTM work before MusicGen's incremental-decode prob
 | phase | scope | milestone | state |
 |---|---|---|---|
 | 0 | repo, ggml pin, shared headers, T5-base encoder + tokenizer | `ac-textenc` matches torch at cossim ≥ 0.9999 | **done** — F32 1.000000000, F16 0.999999934 ([docs/T5.md](T5.md)) |
-| 1 | `ac/seanet.h`, `ac/lstm.h`, MelodyFlow VAE (encode + decode) | VAE round-trip matches torch on 30 s stereo | next |
-| 2 | MelodyFlow DiT (RoPE, `add_zero_attn`, additive timestep, U-ViT skips) | one velocity prediction at cossim ≥ 0.9999 | |
+| 1 | `ac/seanet.h`, `ac/lstm.h`, MelodyFlow VAE (encode + decode) | VAE round-trip matches torch on 30 s stereo | **done** — encode and decode both cossim 1.0000000 ([docs/MELODYFLOW_VAE.md](MELODYFLOW_VAE.md)) |
+| 2 | MelodyFlow DiT (RoPE, `add_zero_attn`, additive timestep, U-ViT skips) | one velocity prediction at cossim ≥ 0.9999 | next |
 | 3 | sway schedule, euler/midpoint, CFG, regularized inversion | `mf-edit` reproduces terry's euler/25/0.12/2/1/0.2 | |
 | 4 | MusicGen LM + KV cache + delay pattern + CFG + top-k | greedy 30 s generation matches token-for-token | |
 | 5 | EnCodec 32 kHz encode + decode | `mg-generate --continue` reproduces `generate_continuation` | |
@@ -37,9 +37,15 @@ full-sequence graphs. MusicGen needs ~1500 sequential steps (×2 for CFG) over a
 once and re-executed. This is the largest single piece of engineering in the project.
 
 **An LSTM.** Both codecs put a 2-layer LSTM in the SEANet bottleneck and ggml has no LSTM
-op. The plan is to run it host-side in plain C++ between two ggml graphs — the bottleneck
-is ~0.4 GFLOP, and `sa3.cpp` already stages T5 → DiT → autoencoder the same way. To be
-measured in Phase 1.
+op. Resolved in Phase 1: the host-side implementation was written and measured first, spent
+2.4x longer on the bottleneck than on the whole convolutional stack around it, and was
+replaced by unrolling the recurrence into the graph — 2.6-2.7x faster end to end, and one
+graph per direction on any backend. See [docs/MELODYFLOW_VAE.md](MELODYFLOW_VAE.md).
+
+**A third, found in Phase 1:** `ggml_conv_1d` builds its im2col matrix in F16, which rounds
+*activations*, not just weights. Over sixteen stacked SEANet convolutions that cost 30x our
+parity gate. `nn::conv_1d_f32` is the same computation with an F32 im2col; the memory cost
+is a large transient buffer, which will want tiling for long inputs on small GPUs.
 
 ## Parity details that are easy to get wrong
 

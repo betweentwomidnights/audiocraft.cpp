@@ -133,6 +133,9 @@ if(AC_BUILD_TOOLS)
 
     add_executable(ac-tokenize tools/ac-tokenize.cpp)
     target_link_libraries(ac-tokenize PRIVATE ac)
+
+    add_executable(ac-vae tools/ac-vae.cpp)
+    target_link_libraries(ac-vae PRIVATE ac)
 endif()
 
 # --- tests -----------------------------------------------------------------
@@ -158,6 +161,16 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     add_test(NAME shared_headers COMMAND shared_headers_test)
     set_tests_properties(shared_headers PROPERTIES LABELS "non-gpu;shared")
 
+    add_executable(lstm_test tests/lstm_test.cpp)
+    target_link_libraries(lstm_test PRIVATE ac)
+    add_test(NAME lstm COMMAND lstm_test)
+    set_tests_properties(lstm PROPERTIES LABELS "non-gpu;shared")
+
+    add_executable(seanet_shape_test tests/seanet_shape_test.cpp)
+    target_link_libraries(seanet_shape_test PRIVATE ac)
+    add_test(NAME seanet_shape COMMAND seanet_shape_test)
+    set_tests_properties(seanet_shape PROPERTIES LABELS "non-gpu;melodyflow")
+
     add_executable(t5_bucket_test tests/t5_bucket_test.cpp)
     target_link_libraries(t5_bucket_test PRIVATE ac)
     add_test(NAME t5_bucket COMMAND t5_bucket_test)
@@ -167,5 +180,9 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
         add_test(NAME t5_converter
                  COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/t5_converter_test.py)
         set_tests_properties(t5_converter PROPERTIES LABELS "non-gpu;tooling")
+
+        add_test(NAME seanet_converter
+                 COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/seanet_converter_test.py)
+        set_tests_properties(seanet_converter PROPERTIES LABELS "non-gpu;tooling;melodyflow")
     endif()
 endif()

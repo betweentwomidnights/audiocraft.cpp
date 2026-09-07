@@ -49,6 +49,28 @@ inline ggml_tensor* linear(ggml_context* ctx, ggml_tensor* w, ggml_tensor* x, gg
     return y;
 }
 
+// Conv1d with an F32 im2col buffer.
+//
+// ggml_conv_1d() builds its im2col matrix as F16 (ggml.c: the dst_type argument is
+// GGML_TYPE_F16 for every non-BF16 kernel), which rounds the *activations*, not just the
+// weights. A single convolution barely notices, but SEANet stacks sixteen of them and the
+// codecs here are F32 end to end: measured on MelodyFlow's encoder, the F16 im2col cost
+// ~0.0016 of cosine similarity against torch, which is 30x our parity gate.
+//
+// The computation is otherwise identical to ggml_conv_1d. The cost is memory: the im2col
+// buffer is OL * IC * K floats, so callers working on long sequences should tile.
+// kernel is [K, IC, OC]; x is [T, IC]; returns [OL, OC].
+inline ggml_tensor* conv_1d_f32(ggml_context* ctx, ggml_tensor* kernel, ggml_tensor* x,
+                                int stride, int pad, int dilation) {
+    ggml_tensor* im2col = ggml_im2col(ctx, kernel, x, stride, 0, pad, 0, dilation, 0,
+                                      /*is_2D=*/false, GGML_TYPE_F32);   // [IC*K, OL, N]
+    ggml_tensor* y = ggml_mul_mat(
+        ctx,
+        ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[1] * im2col->ne[2]),
+        ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
+    return ggml_reshape_2d(ctx, y, im2col->ne[1], kernel->ne[2]);
+}
+
 // Partial NeoX rotary embedding over the first n_dims of each head.
 // a: [head_dim, n_head, seq]; pos: I32 [seq].
 inline ggml_tensor* rope_neox(ggml_context* ctx, ggml_tensor* a, ggml_tensor* pos,

@@ -15,3 +15,6 @@ cppout*/
 *.wav
 *.f32
 *.npy
+
+# local audio fixtures (bring your own; see docs/MELODYFLOW_VAE.md)
+testdata/

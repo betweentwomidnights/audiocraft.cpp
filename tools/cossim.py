@@ -24,15 +24,22 @@ LAYOUT = {
     "t5_hidden": (0, 1),
 
     # --- MelodyFlow (phases 1-3) ---
-    "mf_vae_latent":  (1, 0),   # torch [256, T]  (mean||scale)
-    "mf_vae_audio":   (0, 1),   # torch [2, samples]
-    "mf_dit_velocity": (1, 0),  # torch [128, T]
-    "mf_edit_latent": (1, 0),   # torch [128, T]
+    # Every one of these is channel-slowest on both sides: a ggml [T, C] tensor is numpy
+    # [C, T] in C order, which is already how torch holds them. No transpose.
+    "mf_vae_input":    (0, 1),  # torch [channels, samples]
+    "mf_vae_enc_pre":  (1, 0),  # ggml transposes to [C, T] for the host LSTM
+    "mf_vae_enc_lstm": (1, 0),
+    "mf_vae_dec_pre":  (1, 0),
+    "mf_vae_dec_lstm": (1, 0),
+    "mf_vae_latent":   (0, 1),  # torch [2*latent_dim, T] (mean||scale)
+    "mf_vae_audio":    (0, 1),  # torch [channels, samples]
+    "mf_dit_velocity": (0, 1),  # torch [latent_dim, T]
+    "mf_edit_latent":  (0, 1),  # torch [latent_dim, T]
 
     # --- MusicGen (phases 4-5) ---
-    "mg_lm_logits":   (1, 0),   # torch [K*card, T]
-    "mg_encodec_emb": (1, 0),   # torch [128, T]
-    "mg_audio":       (0, 1),   # torch [1, samples]
+    "mg_lm_logits":   (0, 1),   # torch [K*card, T]
+    "mg_encodec_emb": (0, 1),   # torch [128, T]
+    "mg_audio":       (0, 1),   # torch [channels, samples]
 }
 
 

@@ -12,9 +12,10 @@ covers the two services still on PyTorch there — **gary** (MusicGen
 Scope is deliberately narrow: only what those two services actually call. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-> **status: phase 0.** The shared T5-base conditioner runs and matches the PyTorch
-> reference exactly (F32 cossim 1.000000000; F16 0.999999934). MelodyFlow and MusicGen are
-> not implemented yet — their CMake switches are off by default.
+> **status: phase 1.** The shared T5-base conditioner and MelodyFlow's 48 kHz stereo SEANet
+> VAE both match the PyTorch reference exactly — T5 at F32 cossim 1.000000000, and the VAE
+> at cossim 1.0000000 in both directions over a full 30 s window. The MelodyFlow DiT and all
+> of MusicGen are still to come; their CMake switches are off by default.
 
 ## Build
 
@@ -91,8 +92,9 @@ cd build && ctest -C Release --output-on-failure
 
 Parity against PyTorch is the bar. `tools/dump_*_refs.py` writes reference activations,
 the C++ tools write the same tensors as raw f32 in ggml memory order, and
-`tools/cossim.py` compares them at a 0.9999 gate. See [docs/T5.md](docs/T5.md) for the
-worked example.
+`tools/cossim.py` compares them at a 0.9999 gate. [docs/T5.md](docs/T5.md) and
+[docs/MELODYFLOW_VAE.md](docs/MELODYFLOW_VAE.md) are the worked examples — the latter also
+records two ggml findings worth knowing before porting any convolutional audio model.
 
 ## Credits
 
