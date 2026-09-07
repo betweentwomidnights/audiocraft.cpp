@@ -1,0 +1,17 @@
+# build directories (one per backend, so they coexist for A/B testing)
+build/
+build-*/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# model artifacts and parity data
+models/
+refdata*/
+cppout*/
+*.gguf
+*.wav
+*.f32
+*.npy

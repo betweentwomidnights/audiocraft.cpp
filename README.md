@@ -1,0 +1,108 @@
+# audiocraft.cpp
+
+MusicGen and MelodyFlow in C++ on ggml — no PyTorch, no Python at inference time.
+
+This is the sibling of [sa3.cpp](https://github.com/betweentwomidnights/sa3.cpp), built on
+the same [`betweentwomidnights/ggml`](https://github.com/betweentwomidnights/ggml) fork at
+the same pin. `sa3.cpp` covers stable-audio-3, Stable Audio Open and Foundation-1 for
+[gary4local](https://github.com/betweentwomidnights/gary-localhost-installer); this repo
+covers the two services still on PyTorch there — **gary** (MusicGen
+`generate_continuation`) and **terry** (MelodyFlow `edit`).
+
+Scope is deliberately narrow: only what those two services actually call. See
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
+> **status: phase 0.** The shared T5-base conditioner runs and matches the PyTorch
+> reference exactly (F32 cossim 1.000000000; F16 0.999999934). MelodyFlow and MusicGen are
+> not implemented yet — their CMake switches are off by default.
+
+## Build
+
+```bash
+git clone --recurse-submodules https://github.com/betweentwomidnights/audiocraft.cpp.git
+cd audiocraft.cpp
+
+./build.sh cpu          # or: cuda | vulkan | metal | all   (windows: build.cmd cuda)
+```
+
+Needs CMake and a C++17 compiler (Visual Studio 2022 on Windows). CUDA needs the CUDA
+Toolkit; Vulkan needs the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home); Metal is
+macOS-only.
+
+Converters and the parity harness need a small Python environment:
+
+```bash
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt   # posix: .venv/bin/python
+```
+
+The reference dumpers additionally need torch, transformers and audiocraft. Rather than
+installing torch here, point them at one of gary4local's existing service venvs — see
+[docs/T5.md](docs/T5.md).
+
+## Try it
+
+```bash
+T5=~/.cache/huggingface/hub/models--t5-base/snapshots/a9723ea7f1b39c1eae772870f3b547bf6ef7e6c1
+.venv/Scripts/python.exe tools/convert_t5.py \
+  --src "$T5/model.safetensors" --config "$T5/config.json" --tokenizer "$T5/tokenizer.json" \
+  --out models/t5-base-encoder-0.1B-v1.0-F16.gguf --out-type f16
+
+build/bin/Release/ac-tokenize --t5 models/t5-base-encoder-0.1B-v1.0-F16.gguf \
+  --prompt "80s pop track with bassy drums and synth"
+
+build/bin/Release/ac-textenc --t5 models/t5-base-encoder-0.1B-v1.0-F16.gguf \
+  --prompt "80s pop track with bassy drums and synth" --out cppout/t5_hidden.f32
+```
+
+## Configuration
+
+Backend and paths come from environment variables, so a downstream app sets them in the
+process it spawns and never touches the CLI. `source ./env.sh` (Windows: `env.cmd`, or
+`. .\env.ps1`) puts the built tools on `PATH`.
+
+| | env var |
+|---|---|
+| base ggufs | `AC_MODELS_DIR` |
+| device / gpu selection / cpu threads | `AC_DEVICE` `AC_GPU` `AC_THREADS` |
+| flash attention | `AC_FLASH_ATTN` |
+
+## Layout
+
+```
+src/            header-driven, like sa3.cpp
+  ac/           shared across both models (T5, tokenizer, transformer, SEANet, LSTM)
+  mf/           MelodyFlow: DiT, VAE, flow solver, pipeline
+  mg/           MusicGen: LM, delay pattern, KV cache, EnCodec, pipeline
+tools/          CLI entry points, converters, reference dumpers, cossim harness
+tests/          CTest binaries + python converter tests
+docs/           per-model porting notes, measured parity, ggml pin policy
+```
+
+`src/{gguf_model,nn,wav,audio_post,encoding,rng}.h` and `src/ac/{t5,tokenizer}.h` are ports
+of the corresponding `sa3.cpp` files with the namespace changed (`sa3` → `ac`) and the env
+prefix changed (`SA3_` → `AC_`); each carries a provenance line at the top.
+
+## Testing
+
+```bash
+cd build && ctest -C Release --output-on-failure
+```
+
+Parity against PyTorch is the bar. `tools/dump_*_refs.py` writes reference activations,
+the C++ tools write the same tensors as raw f32 in ggml memory order, and
+`tools/cossim.py` compares them at a 0.9999 gate. See [docs/T5.md](docs/T5.md) for the
+worked example.
+
+## Credits
+
+[facebookresearch/audiocraft](https://github.com/facebookresearch/audiocraft) is the
+reference implementation of both models.
+[sa3.cpp](https://github.com/betweentwomidnights/sa3.cpp) is where the porting method,
+the ggml fork, and most of the shared code come from.
+[PABannier/encodec.cpp](https://github.com/PABannier/encodec.cpp) is the reference for the
+EnCodec graph, and [ayutaz/vokra](https://github.com/ayutaz/vokra) (Apache-2.0) has
+useful EnCodec and delay-pattern parity fixtures.
+
+Model weights are the authors': MusicGen and MelodyFlow checkpoints are CC-BY-NC-4.0,
+t5-base is Apache-2.0. This code is MIT.

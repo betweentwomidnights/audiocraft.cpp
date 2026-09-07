@@ -1,0 +1,7 @@
+# Converter and parity-harness dependencies (tools/convert_*.py, tools/cossim.py).
+# The reference dumpers (tools/dump_*_refs.py) additionally need torch + transformers +
+# audiocraft; use one of the gary4local service venvs for those rather than installing
+# torch here. See docs/PARITY.md.
+gguf>=0.19
+numpy>=2
+safetensors>=0.5
