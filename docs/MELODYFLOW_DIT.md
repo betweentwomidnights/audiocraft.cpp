@@ -137,7 +137,7 @@ F16 is marginally *slower* on CPU — dequantisation is not free and these matmu
 bandwidth-bound — which matches what `sa3.cpp` documents about quantisation on CPU. On GPU
 the two are the same speed at this size, so F16 buys VRAM headroom rather than throughput.
 
-**CUDA is 33x faster and measurably less accurate**, because ggml runs every F32 GEMM at
+**CUDA is 32x faster and measurably less accurate**, because ggml runs every F32 GEMM at
 TF32 — see [GGML_FORK.md](GGML_FORK.md#open-every-f32-gemm-on-cuda-silently-runs-at-tf32).
 Both rows still clear the 0.9999 gate for a single forward. With TF32 disabled by the local
 patch documented there, F32 goes to 0.9999975 (at +34% time) and F16 to 0.9999768 (free) —

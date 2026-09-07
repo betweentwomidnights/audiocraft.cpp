@@ -47,18 +47,39 @@ and the `GGML_CUDA_CUBLAS_COMPUTE_TYPE=f32` environment variable both only selec
 leave the output bit-identical.
 
 Measured on an RTX 5070 Laptop against float32 torch, with a one-line local patch gating the
-math mode on an environment variable:
+math mode on an environment variable. Accuracy first:
 
-| | TF32 on (today) | TF32 off | cost |
-|---|---|---|---|
-| MelodyFlow VAE encoder, 30 s | cossim 0.9998489, err 8.2e-01 | **1.0000000**, err 2.9e-05 | 0.408 s -> 0.448 s (+10%) |
-| MelodyFlow DiT F32, 750 frames | 0.9999958 | 0.9999975 | 0.227 s -> 0.305 s (+34%) |
-| MelodyFlow DiT F16, 750 frames | 0.9999286 | **0.9999768** | 0.225 s -> 0.228 s (free) |
+| | TF32 on (today) | TF32 off |
+|---|---|---|
+| MelodyFlow VAE encoder, 30 s | cossim 0.9998489, err 8.2e-01 | **1.0000000**, err 2.9e-05 |
+| MelodyFlow DiT F32, 750 frames | 0.9999958 | 0.9999975 |
+| MelodyFlow DiT F16, 750 frames | 0.9999286 | **0.9999768** |
 
 The VAE encoder is the one that matters: with TF32 on it fails this repo's 0.9999 parity
 gate, and the error is the same magnitude as the F16-im2col bug documented in
 [MELODYFLOW_VAE.md](MELODYFLOW_VAE.md) -- sixteen stacked convolutions accumulate it. For the
-DiT, turning TF32 off is free at F16 and buys a 3x smaller error.
+DiT, turning TF32 off buys a 3x smaller error at F16.
+
+### What it costs
+
+**Applying the patch costs nothing.** It is one `getenv` at cuBLAS handle creation, once per
+process, and with `GGML_CUDA_TF32` unset the behaviour is bit-identical to today. Only
+opting out has a price, and it is not where the single-sample numbers first suggested.
+
+Counterbalanced ABBA, six samples each, medians -- following this file's own rule that a
+laptop GPU throttles across a sequence, so a plain "run A then B" measures the ordering:
+
+| | TF32 on | TF32 off | delta | spreads |
+|---|---:|---:|---:|---|
+| DiT F16, 750 frames | 0.227 s | 0.231 s | +1.5% | overlap -- not resolvable |
+| DiT F32, 750 frames | 0.237 s | 0.299 s | +25.9% | disjoint |
+| VAE encode, 30 s | 0.406 s | 0.414 s | +2.1% | overlap -- not resolvable |
+
+Only the F32 DiT is a real slowdown, and that build is 3.9 GB and not the one that ships.
+For the configuration terry actually runs -- F16 DiT, F32 VAE -- a full 125-forward edit
+goes from about 28.4 s to about 28.8 s, roughly 1%, in exchange for the encoder going from
+below the parity gate to exact. The F16 case is the interesting one: half-precision weights
+are *already* the dominant error, so TF32 on top buys no speed and costs accuracy.
 
 The patch that produced those numbers, for whoever picks this up:
 
