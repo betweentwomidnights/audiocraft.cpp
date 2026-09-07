@@ -116,14 +116,13 @@ falsifiable.
 
 30 s stereo, F32 GGUF, CPU:
 
-| checkpoint | CPU cossim | CPU max abs err | CUDA cossim |
-|---|---:|---:|---:|
-| `mf_vae_latent` — encoder `mean‖scale` [256, 750] | 1.0000000 | 3.2e-05 | 0.9998489 |
-| `mf_vae_audio` — decoder output [2, 1440000] | 1.0000000 | 2.0e-05 | 0.9999998 |
+| checkpoint | CPU | CUDA |
+|---|---:|---:|
+| `mf_vae_latent` — encoder `mean‖scale` [256, 750] | 1.0000000 (3.2e-05) | 1.0000000 (2.9e-05) |
+| `mf_vae_audio` — decoder output [2, 1440000] | 1.0000000 (2.0e-05) | 1.0000000 (2.3e-05) |
 
-The CUDA encoder figure is the TF32 issue above, not a graph difference; with TF32 disabled
-it is 1.0000000. Encode takes 0.40 s and decode 0.47 s on an RTX 5070 Laptop, against
-2.57 s and 3.10 s on this CPU.
+Encode takes 0.42 s and decode 0.52 s on an RTX 5070 Laptop, against 2.57 s and 3.10 s on
+this CPU. With `AC_CUDA_TF32=1` the encoder drops to 0.9998489 and saves about 2%.
 
 Intermediate taps at 10 s, against the torch per-layer dump:
 

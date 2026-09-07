@@ -1,14 +1,19 @@
 # The ggml submodule
 
 `audiocraft.cpp` pins an exact commit of
-[`betweentwomidnights/ggml`](https://github.com/betweentwomidnights/ggml) — **the same
-fork and the same pin `sa3.cpp` uses**, so the two repos stay trivially comparable and a
-backend fix validated in one is the identical code in the other.
+[`betweentwomidnights/ggml`](https://github.com/betweentwomidnights/ggml), the fork shared
+with `sa3.cpp` and `acestep.cpp`.
 
-Current pin: `19c5421c9314893db83ab93575d34b9cb828516f`
-(`git describe` → `sa3-training-v1-metal-100-g19c5421c`, upstream base ggml `v0.17.0`).
+Current pin: `1b05d2b0` on `feature/audiocraft-cuda-tf32-v0.17.0`, one commit past
+`19c5421c` — the commit `sa3.cpp` pins — which is upstream ggml `v0.17.0` plus the fork's
+existing patch stack.
 
-The fork's patch stack — CPU/CUDA/Vulkan/Metal autodiff and backend work, the Q4_K_M
+> **This branch is local and unpushed.** A fresh `git clone --recurse-submodules` of this
+> repo cannot resolve the gitlink until the branch is pushed to the fork. That is deliberate
+> for now: the one commit on it changes CUDA numerics, and the plan is to build and retest
+> `sa3.cpp` and `acestep.cpp` against it before anything is published.
+
+The rest of the fork's patch stack — CPU/CUDA/Vulkan/Metal autodiff and backend work, the Q4_K_M
 `get_rows` fix, the wide-row `SET` fix, quantized-`src0` `OUT_PROD` — is documented in
 **`sa3.cpp/docs/GGML_FORK.md`**, which is the source of truth. None of it is inference
 forward-op work; the models here use stock ggml operations.
@@ -25,7 +30,7 @@ upstream bump could disturb:
 | `ggml_rope_ext` (NeoX) | MelodyFlow DiT positional embedding |
 | `ggml_flash_attn_ext` | optional attention path (`AC_FLASH_ATTN`) |
 
-## Open: every F32 GEMM on CUDA silently runs at TF32
+## Our one commit: opting out of TF32 for F32 matmuls on CUDA
 
 `ggml_backend_cuda_context::cublas_handle` creates its cuBLAS handle with
 
@@ -90,15 +95,41 @@ CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device],
         ? CUBLAS_DEFAULT_MATH : CUBLAS_TF32_TENSOR_OP_MATH));
 ```
 
-It is deliberately **not** applied to the pinned submodule. Changing the shared fork means
-following the pin policy below -- build and test every backend, push the branch, move the
-gitlink -- and it would change `sa3.cpp`'s numerics too, so it is a decision for the fork
-owner rather than something to slip in. It is also worth raising upstream: any ggml consumer
-running convolutions or long accumulation chains in F32 on CUDA is affected and has no way
-to know.
+### How it is wired
 
-Until then, CUDA results in this repo are reported with TF32 on, which is what a fresh clone
-produces.
+The **fork default is unchanged**: with `GGML_CUDA_TF32` unset, the math mode is exactly
+what it was, so `sa3.cpp` and `acestep.cpp` built against this branch produce bit-identical
+output to before. Only a caller that asks moves.
+
+`audiocraft.cpp` asks, for its own processes only. `ac::prefer_f32_matmuls_once()` in
+`src/gguf_model.h` sets `GGML_CUDA_TF32=0` before the first backend is created, unless the
+caller already set `GGML_CUDA_TF32` or passed `AC_CUDA_TF32=1`. So:
+
+| | result |
+|---|---|
+| default | full F32 accumulation, matching CPU |
+| `AC_CUDA_TF32=1` | ggml's default TF32, ~2% faster, 1.5e-4 less accurate |
+| `GGML_CUDA_TF32=` anything | wins over both; the escape hatch for A/B testing |
+
+### Still worth raising upstream
+
+Any ggml consumer running convolutions or long F32 accumulation chains on CUDA is affected
+and has no way to know: the tensors say F32, the backend reports F32, and the arithmetic is
+not. A `ggml_backend_cuda_set_tf32()` or a `supports_op`-visible flag would be a better
+answer than an environment variable; the variable is what fits in one line without adding
+public API surface to a fork.
+
+### Before this pin is published
+
+Per the pin policy below, and because the branch changes CUDA numerics for everyone who
+takes it:
+
+1. Build `sa3.cpp` and `acestep.cpp` against this branch on CUDA.
+2. Confirm their outputs are unchanged with `GGML_CUDA_TF32` unset — that is the whole point
+   of leaving the default alone, and it is the regression test.
+3. Optionally measure what they gain from `GGML_CUDA_TF32=0`; both have convolutional
+   decoders, so `sa3.cpp`'s Oobleck is a plausible beneficiary.
+4. Then push the branch and record the pin here.
 
 ## Pin policy
 
@@ -126,9 +157,23 @@ git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
-## A note on the default branch
+## Where this branch sits
 
-At the time of writing, the fork's default branch tip is `a4a52c4a` (the merge of PR #5,
-"Shared GGML 0.17 candidate for SA3 and ACE training"). Its **tree is byte-identical** to
-the pinned `19c5421c` — `git diff 19c5421c a4a52c4a` is empty — so pinning the same commit
-`sa3.cpp` does costs nothing and buys a directly comparable checkout.
+```
+19c5421c   sa3.cpp's pin, upstream v0.17.0 + the fork's patch stack
+  |        (a4a52c4a, the fork's default tip, has a byte-identical tree)
+  |
+  +-- 1b05d2b0   feature/audiocraft-cuda-tf32-v0.17.0   <- audiocraft.cpp pins this
+                 cuda : allow opting out of TF32 for F32 matmuls
+```
+
+One commit, default-preserving. `sa3.cpp` and `acestep.cpp` can move onto this branch
+whenever it suits without their output changing; the point of retesting them is to prove
+exactly that.
+
+Read the pin from a checkout rather than trusting this file:
+
+```bash
+git -C ggml rev-parse HEAD          # 1b05d2b0...
+git -C ggml log --oneline 19c5421c..HEAD
+```

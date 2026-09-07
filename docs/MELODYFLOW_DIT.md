@@ -130,8 +130,8 @@ One forward at the full 750-frame window, this machine:
 |---|---|---:|---:|
 | CPU (Core Ultra 9 275HX) | F32 | 7.29 s | 1.0000000 |
 | CPU | F16 | 7.67 s | 0.9999992 |
-| CUDA (RTX 5070 Laptop, 8 GB) | F32 | 0.227 s | 0.9999958 |
-| CUDA | F16 | 0.221 s | 0.9999286 |
+| CUDA (RTX 5070 Laptop, 8 GB) | F32 | 0.298 s | 0.9999975 |
+| CUDA | F16 | 0.234 s | 0.9999768 |
 
 F16 is marginally *slower* on CPU — dequantisation is not free and these matmuls were not
 bandwidth-bound — which matches what `sa3.cpp` documents about quantisation on CPU. On GPU

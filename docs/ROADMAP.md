@@ -52,6 +52,13 @@ through bfloat16 in the checkpoint, and torch rotates with those rounded values.
 the closed form does not match. The converter keeps the stored table and feeds it to
 `ggml_rope_ext` as `freq_factors` with `freq_base = 1`.
 
+**A fifth, and the only one needing a fork change:** ggml creates its cuBLAS handle with
+`CUBLAS_TF32_TENSOR_OP_MATH`, so every F32 GEMM on CUDA computes at ten mantissa bits, with
+no way to opt out from the calling side. That put the VAE encoder below the parity gate on
+GPU. `feature/audiocraft-cuda-tf32-v0.17.0` adds a default-preserving `GGML_CUDA_TF32=0`
+opt-out; `sa3.cpp` and `acestep.cpp` get rebuilt and confirmed unchanged against it before
+the branch is published. See [GGML_FORK.md](GGML_FORK.md).
+
 ## Parity details that are easy to get wrong
 
 These produce plausible-but-wrong audio rather than an error, so they are called out here

@@ -118,7 +118,36 @@ inline void configure_cpu_threads(ggml_backend_t b, int n_threads) {
 // device: explicit device request from the API (nullptr/empty falls back to the
 // AC_DEVICE env var, so CLI usage is unchanged). "cpu" forces the CPU backend;
 // anything else selects a GPU (optionally narrowed by AC_GPU) with CPU fallback.
+// Choose full F32 accumulation over TF32 for CUDA matmuls, unless asked otherwise.
+//
+// ggml creates its cuBLAS handle with CUBLAS_TF32_TENSOR_OP_MATH, which computes every F32
+// GEMM at ten mantissa bits. That is fine for a transformer and not fine for a 16-layer
+// convolutional audio encoder: it costs the MelodyFlow VAE 1.5e-4 of cosine similarity
+// against torch, enough to miss this repo's parity gate, while buying about 2% of speed.
+// See docs/GGML_FORK.md.
+//
+// The fork honours GGML_CUDA_TF32=0; this only flips the default for our own processes, so
+// nothing else using the same ggml is affected. AC_CUDA_TF32=1 restores ggml's default, and
+// an explicitly set GGML_CUDA_TF32 always wins.
+inline void prefer_f32_matmuls_once() {
+    static const bool done = [] {
+        if (getenv("GGML_CUDA_TF32")) return true;          // caller has already decided
+        const char* opt_in = getenv("AC_CUDA_TF32");
+        if (opt_in && opt_in[0] == '1') return true;        // explicitly wants TF32
+#ifdef _WIN32
+        _putenv_s("GGML_CUDA_TF32", "0");
+#else
+        setenv("GGML_CUDA_TF32", "0", 0);
+#endif
+        return true;
+    }();
+    (void)done;
+}
+
 inline ggml_backend_t make_backend(int cpu_threads = 0, const char* device = nullptr) {
+    // Must happen before the first matmul: ggml reads this when it lazily creates the
+    // cuBLAS handle, and the handle's math mode is fixed for the life of the process.
+    prefer_f32_matmuls_once();
     load_dynamic_backends_once();
     std::string dev_str = (device && *device) ? device : "";
     if (dev_str.empty()) { const char* e = getenv("AC_DEVICE"); if (e) dev_str = e; }
