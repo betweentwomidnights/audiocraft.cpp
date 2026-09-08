@@ -1,4 +1,4 @@
-// terry-server -- MelodyFlow's `edit` over HTTP, on :8002.
+// melodyflow-server -- MelodyFlow's `edit` over HTTP, on :8002.
 //
 // A drop-in for gary4local's `localhost_melodyflow.py`, so `service_manager.rs` only changes
 // `entryPoint` from `python.exe localhost_melodyflow.py` to this binary and skips building a
@@ -211,7 +211,7 @@ bool build_request(const Json& body, TransformRequest& out, std::string& error) 
 
 void usage() {
     fprintf(stderr,
-        "usage: terry-server [--port 8002] [--models-dir DIR] [--device NAME]\n"
+        "usage: melodyflow-server [--port 8002] [--models-dir DIR] [--device NAME]\n"
         "\n"
         "Serves MelodyFlow's edit on the same routes as gary4local's melodyflow service.\n"
         "Models are found in --models-dir (or AC_MODELS_DIR): melodyflow-dit-*, \n"
@@ -411,7 +411,7 @@ int main(int argc, char** argv) {
         }
     });
 
-    fprintf(stderr, "[ac] terry-server listening on http://%s:%d\n", host.c_str(), port);
+    fprintf(stderr, "[ac] melodyflow-server listening on http://%s:%d\n", host.c_str(), port);
     if (!server.listen(host.c_str(), port)) {
         fprintf(stderr, "error: could not bind %s:%d\n", host.c_str(), port);
         return 1;

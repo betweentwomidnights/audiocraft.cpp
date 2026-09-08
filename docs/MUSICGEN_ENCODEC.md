@@ -195,8 +195,9 @@ and channel mixing happen there and are the easiest things to get subtly differe
 
 ## Remaining integration gates
 
-- **No `gary-server` yet.** Phase 6 owns `:8000`, the job queue and the `session_id` polling,
-  plus splicing the continuation back onto the original track the way `continue_music` does.
+- **Splicing.** `musicgen-server` returns the continuation including its prompt, the way
+  `generate_continuation` does. Joining it back onto the source track at the seam is the
+  caller's job and gary4local's plugin already does it.
 - **Model coverage.** One codec, one LM checkpoint. Every `thepatch/*` finetune points at the
   same `facebook/encodec_32khz`, so the codec should be shared across all of them — but
   "should" is not "did".

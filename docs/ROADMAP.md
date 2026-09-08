@@ -22,7 +22,7 @@ de-risking the shared SEANet/LSTM work before MusicGen's incremental-decode prob
 | 3 | sway schedule, euler/midpoint, CFG, regularized inversion | `mf-edit` reproduces terry's euler/25/0.12/2/1/0.2 | **done** — audio cossim 0.9999179 at 30 s ([docs/MELODYFLOW_EDIT.md](MELODYFLOW_EDIT.md)) |
 | 4 | MusicGen LM + KV cache + delay pattern + CFG + top-k | greedy 30 s generation matches token-for-token | **done** — 6000/6000 tokens, and 1.7x faster than torch ([docs/MUSICGEN_LM.md](MUSICGEN_LM.md)) |
 | 5 | EnCodec 32 kHz encode + decode | `mg-generate --continue` reproduces `generate_continuation` | **done** — every stage exact from a raw wav ([docs/MUSICGEN_ENCODEC.md](MUSICGEN_ENCODEC.md)) |
-| 6 | `terry-server` :8002, `gary-server` :8000, quantized tiers, GGUF publication | drop-in for the Python services in gary4local | **servers done** ([docs/SERVICES.md](SERVICES.md)); tiers and publication open |
+| 6 | `melodyflow-server` :8002, `musicgen-server` :8000, quantized tiers, GGUF publication | drop-in for the Python services in gary4local | **servers done** ([docs/SERVICES.md](SERVICES.md)); tiers and publication open |
 
 Deferred on purpose: MusicGen LoRA training. `sa3.cpp`'s trainer is already generic
 (functional LoRA, gradient checkpointing, quantized-base `out_prod`), so a MusicGen target

@@ -1,4 +1,4 @@
-// gary-server -- MusicGen's `generate_continuation` over HTTP, on :8000.
+// musicgen-server -- MusicGen's `generate_continuation` over HTTP, on :8000.
 //
 // A drop-in for gary4local's `g4l_localhost.py`, so `service_manager.rs` only changes
 // `entryPoint` from `python.exe g4l_localhost.py` to this binary and skips building a venv.
@@ -292,7 +292,7 @@ void start_generation(GenerateRequest req, const char* started_message,
 
 void usage() {
     fprintf(stderr,
-        "usage: gary-server [--port 8000] [--models-dir DIR] [--device NAME]\n"
+        "usage: musicgen-server [--port 8000] [--models-dir DIR] [--device NAME]\n"
         "\n"
         "Serves MusicGen continuation on the same routes as gary4local's gary service.\n"
         "Every musicgen-*.gguf in --models-dir (or AC_MODELS_DIR) is offered by\n"
@@ -450,7 +450,7 @@ int main(int argc, char** argv) {
         res.set_content(o.str(), "application/json");
     });
 
-    fprintf(stderr, "[ac] gary-server listening on http://%s:%d\n", host.c_str(), port);
+    fprintf(stderr, "[ac] musicgen-server listening on http://%s:%d\n", host.c_str(), port);
     if (!server.listen(host.c_str(), port)) {
         fprintf(stderr, "error: could not bind %s:%d\n", host.c_str(), port);
         return 1;

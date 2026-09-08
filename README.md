@@ -17,7 +17,7 @@ Scope is deliberately narrow: only what those two services actually call. See
 > torch-on-CPU than torch-on-GPU is. `mg-generate` is gary's whole transform, wav in and wav
 > out, and reproduces torch **token for token from a raw 44.1 kHz file**: 6000/6000 codes
 > over a 30 s continuation, with the decoded audio at cossim 1.0000000. It is also faster
-> than torch on both CPU and GPU. `terry-server` and `gary-server` serve both on the routes
+> than torch on both CPU and GPU. `melodyflow-server` and `musicgen-server` serve both on the routes
 > gary4juce already speaks, so gary4local's Tauri side only changes an `entryPoint` — leaving
 > model publication and quantized tiers as the last of it.
 

@@ -221,8 +221,9 @@ To bisect, shorten first: `--seconds 4 --steps 5` on both sides runs in seconds,
 
 ## Remaining integration gates
 
-- **No `terry-server` yet.** Phase 6 owns the `:8002` endpoints, the job queue and the
-  `session_id` polling model.
+- **The service is `melodyflow-server`** ([docs/SERVICES.md](SERVICES.md)); the presets
+  from `variations.py` live there rather than in `mf-edit`, which takes a raw prompt and
+  flow step.
 - **The 34 presets from `variations.py` are not carried over.** `mf-edit` takes a raw prompt
   and flowstep; the preset table belongs with the server.
 - **Speed.** 2x behind torch, with the levers listed above untouched.

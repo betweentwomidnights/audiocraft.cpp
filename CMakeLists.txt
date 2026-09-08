@@ -175,10 +175,10 @@ if(AC_BUILD_TOOLS)
     endfunction()
 
     if(AC_BUILD_MELODYFLOW)
-        ac_add_server(terry-server tools/terry-server.cpp ac_melodyflow)
+        ac_add_server(melodyflow-server tools/melodyflow-server.cpp ac_melodyflow)
     endif()
     if(AC_BUILD_MUSICGEN)
-        ac_add_server(gary-server tools/gary-server.cpp ac_musicgen)
+        ac_add_server(musicgen-server tools/musicgen-server.cpp ac_musicgen)
     endif()
 endif()
 

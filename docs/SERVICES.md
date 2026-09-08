@@ -1,20 +1,23 @@
 # The two services
 
-`terry-server` and `gary-server` are drop-in replacements for gary4local's two remaining
-Python services. The point is that `service_manager.rs` only changes `entryPoint` from
-`python.exe <script>.py` to a binary and stops building a venv — the routes, the field names
-and the polling model are the ones gary4juce is already reading.
+`melodyflow-server` and `musicgen-server` put each model behind HTTP: audio and a prompt in,
+audio out, with a session id to poll while it runs. They are the long-running form of
+`mf-edit` and `mg-generate` and depend on nothing outside this repository.
 
-| | terry | gary |
+| | melodyflow-server | musicgen-server |
 |---|---|---|
-| port | 8002 | 8000 |
-| replaces | `localhost_melodyflow.py` | `g4l_localhost.py` |
+| default port | 8002 | 8000 |
 | model | MelodyFlow `edit` | MusicGen `generate_continuation` |
 | audio | 48 kHz stereo, 30 s window | 32 kHz mono, 30 s output |
 
+The routes and reply shapes deliberately match gary4local's `localhost_melodyflow.py` and
+`g4l_localhost.py`, because a client already speaks them — gary4juce polls
+`/api/juce/poll_status/<id>` and reads particular field names. That is a compatibility
+choice, not a coupling: nothing here imports from gary4local or assumes it is present.
+
 ```bash
-terry-server --port 8002 --models-dir models
-gary-server  --port 8000 --models-dir models
+melodyflow-server --port 8002 --models-dir models
+musicgen-server  --port 8000 --models-dir models
 ```
 
 `AC_MODELS_DIR` and `AC_DEVICE` work as they do for the CLI tools, so the Tauri side stays
@@ -62,7 +65,7 @@ Three, all of them improvements rather than shortcuts.
 **`/api/models` reports what is on disk.** The Python service returns a hardcoded list of
 fourteen `thepatch/*` repositories and downloads whichever the user picks. A native service
 cannot fetch and convert a PyTorch checkpoint on demand, so offering a model that has not
-been converted would fail at generation time instead of in the picker. `gary-server` scans
+been converted would fail at generation time instead of in the picker. `musicgen-server` scans
 `AC_MODELS_DIR` for `musicgen-*.gguf`, names each by the part between the prefix and the
 version (`musicgen-vanya-dnb-0.4B-v1.0-F16.gguf` becomes `vanya-dnb`), and groups them by the
 parameter count in the file rather than by guessing from the name. F16 wins over F32 for the
