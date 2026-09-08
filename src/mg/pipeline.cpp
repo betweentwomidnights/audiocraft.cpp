@@ -17,41 +17,46 @@ double now_s() {
     return std::chrono::duration<double>(clock::now().time_since_epoch()).count();
 }
 
-// One decoding stream: a KV cache plus the graph that feeds it.
+// The decoder: one KV cache, one graph, `n_seq` streams through it.
+//
+// Classifier-free guidance needs two forward passes over the same weights with the same
+// tokens, differing only in the cross-attention context. audiocraft runs them as one batch
+// of two -- "it is about x2 faster than doing 2 forward passes", says the comment in
+// `LMModel.generate` -- and that is what `n_seq` is here. The cache carries a matching axis,
+// so the two histories stay separate while sharing every kernel launch.
 //
 // The graph is rebuilt for every forward. It has to be: the cache views encode how much
 // history there is, and ggml bakes a view's offset and extent in at build time. Building
-// costs about 0.3 ms for this stack against several milliseconds of compute, and the
-// alternative -- attending over the full capacity with a mask and keeping one static graph
-// -- doubles the attention work to save that. Measured before choosing; see
-// docs/MUSICGEN_LM.md.
+// costs a fraction of a millisecond against milliseconds of compute, and the alternative --
+// attending over the full capacity with a mask and keeping one static graph -- doubles the
+// attention work to save it.
 //
 // The context memory and the allocator are reused across steps, so only the graph objects
 // are rebuilt, not the buffers behind them.
-class Stream {
+class Decoder {
 public:
-    // `context_width` is 0 to skip cross-attention, `cond_dim` for raw T5 states, or `dim`
-    // for a source that is already past `lm.cond_proj`.
-    Stream(const GgufModel& lm, const LmConfig& c, int capacity, int context_width)
-        : lm_(lm), c_(c), context_width_(context_width),
-          cache_(lm.backend, c.layers, c.head_dim, c.heads, capacity) {
-        // Room for the graph's tensor structs and the graph itself, reused every step.
+    Decoder(const GgufModel& lm, const LmConfig& c, int capacity, int n_seq,
+            const TextCondition& cond, bool cross_attention)
+        : lm_(lm), c_(c), n_seq_(n_seq), cross_(cross_attention),
+          cache_(lm.backend, c.layers, c.head_dim, c.heads, capacity, n_seq) {
         arena_.resize(ggml_tensor_overhead() * lm_graph_nodes(c) * 2 +
                       ggml_graph_overhead_custom(lm_graph_nodes(c), false) + (1u << 20));
         alloc_ = ggml_gallocr_new(ggml_backend_get_default_buffer_type(lm.backend));
         if (!alloc_) throw std::runtime_error("failed to create the LM graph allocator");
+        if (cross_) project_context(cond);
     }
-    ~Stream() {
+    ~Decoder() {
         if (alloc_) ggml_gallocr_free(alloc_);
     }
-    Stream(const Stream&) = delete;
-    Stream& operator=(const Stream&) = delete;
+    Decoder(const Decoder&) = delete;
+    Decoder& operator=(const Decoder&) = delete;
 
-    int used() const { return cache_.used(); }
+    int forwards() const { return forwards_; }
+    size_t cache_bytes() const { return cache_.bytes(); }
 
-    // Feed `n_tokens` sequence steps and return the logits for the last one, [card, n_q].
-    const std::vector<float>& forward(const int32_t* ids, int n_tokens,
-                                      const std::vector<float>& context, int n_ctx) {
+    // Feed `n_tokens` sequence steps and return the logits for the last one,
+    // [card, n_q, n_seq] -- stream 0 conditional, stream 1 (when present) null.
+    const std::vector<float>& forward(const int32_t* ids, int n_tokens) {
         ggml_init_params ip = {arena_.size(), arena_.data(), true};
         ggml_context* ctx = ggml_init(ip);
         if (!ctx) throw std::runtime_error("failed to create the LM graph context");
@@ -61,13 +66,13 @@ public:
         } release{ctx};
 
         ggml_tensor* ids_t = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_tokens, c_.n_q);
-        ggml_tensor* pos_t = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, c_.dim, n_tokens);
+        ggml_tensor* pos_t = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, c_.dim, n_tokens, n_seq_);
         ggml_tensor* ctx_t = nullptr;
         ggml_tensor* mask_t = nullptr;
         ggml_set_input(ids_t);
         ggml_set_input(pos_t);
-        if (context_width_ > 0) {
-            ctx_t = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, context_width_, n_ctx);
+        if (cross_) {
+            ctx_t = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, c_.dim, n_ctx_, n_seq_);
             ggml_set_input(ctx_t);
         }
         // A single query against a full cache sees every key, so only the prefill needs a
@@ -81,8 +86,7 @@ public:
         }
 
         std::vector<ggml_tensor*> writes;
-        ggml_tensor* logits = lm_forward(ctx, lm_, ids_t, pos_t, ctx_t,
-                                         context_width_ == c_.dim, mask_t, cache_,
+        ggml_tensor* logits = lm_forward(ctx, lm_, ids_t, pos_t, ctx_t, mask_t, cache_,
                                          n_tokens, writes, c_);
         ggml_set_output(logits);
         ggml_cgraph* graph = ggml_new_graph_custom(ctx, lm_graph_nodes(c_), false);
@@ -97,10 +101,17 @@ public:
         // Every input goes up on every execution. See docs/MELODYFLOW_EDIT.md: the graph
         // arena reclaims an input's memory as soon as its last consumer has run.
         ggml_backend_tensor_set(ids_t, ids, 0, (size_t)n_tokens * c_.n_q * sizeof(int32_t));
+        // The streams share their tokens and therefore their positions -- guidance
+        // duplicates the sequence and changes only the context -- so this is one block
+        // repeated.
         const std::vector<float> pos = sin_positions(cache_.used(), n_tokens, c_);
-        ggml_backend_tensor_set(pos_t, pos.data(), 0, pos.size() * sizeof(float));
+        for (int seq = 0; seq < n_seq_; ++seq)
+            ggml_backend_tensor_set(pos_t, pos.data(),
+                                    (size_t)seq * pos.size() * sizeof(float),
+                                    pos.size() * sizeof(float));
         if (ctx_t)
-            ggml_backend_tensor_set(ctx_t, context.data(), 0, context.size() * sizeof(float));
+            ggml_backend_tensor_set(ctx_t, context_.data(), 0,
+                                    context_.size() * sizeof(float));
         if (mask_t) {
             std::vector<float> mask((size_t)n_tokens * n_tokens, 0.0f);
             for (int qi = 0; qi < n_tokens; ++qi)
@@ -113,20 +124,72 @@ public:
         if (!graph_compute_checked(lm_.backend, graph, "MusicGen LM", error))
             throw std::runtime_error(error);
 
-        out_.resize((size_t)c_.card * c_.n_q);
+        out_.resize((size_t)c_.card * c_.n_q * n_seq_);
         ggml_backend_tensor_get(logits, out_.data(), 0, out_.size() * sizeof(float));
         cache_.advance(n_tokens);
+        ++forwards_;
         return out_;
     }
 
 private:
+    // `lm.cond_proj` applied once, building the [dim, n_ctx, n_seq] source the layers read.
+    //
+    // Stream 0 gets the projected text; stream 1 is left at **zero**. The distinction
+    // matters: `T5Conditioner.forward` zeroes the null branch *after* `output_proj`, and
+    // that projection has a bias, so projecting a zero would leave the bias behind and be a
+    // different model. Getting it backwards once cost an afternoon (docs/MUSICGEN_LM.md).
+    //
+    // Doing it here rather than inside the forward also means it runs once per generation
+    // rather than twelve hundred times.
+    void project_context(const TextCondition& cond) {
+        if (cond.tokens <= 0) throw std::runtime_error("the conditioning has no tokens");
+        if (cond.hidden.size() != (size_t)c_.cond_dim * cond.tokens)
+            throw std::runtime_error("conditioning does not hold cond_dim * tokens values");
+        n_ctx_ = cond.tokens;
+
+        std::vector<uint8_t> arena(ggml_tensor_overhead() * 32 +
+                                   ggml_graph_overhead() + (1u << 16));
+        ggml_init_params ip = {arena.size(), arena.data(), true};
+        ggml_context* ctx = ggml_init(ip);
+        if (!ctx) throw std::runtime_error("failed to create the projection context");
+        struct Release { ggml_context* ctx; ~Release() { ggml_free(ctx); } } release{ctx};
+
+        ggml_tensor* t5 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, c_.cond_dim, n_ctx_);
+        ggml_set_input(t5);
+        ggml_tensor* projected = ggml_cont(ctx, lm_project_context(ctx, lm_, t5));
+        ggml_set_output(projected);
+        ggml_cgraph* graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, projected);
+
+        ggml_gallocr_t alloc =
+            ggml_gallocr_new(ggml_backend_get_default_buffer_type(lm_.backend));
+        if (!alloc || !ggml_gallocr_alloc_graph(alloc, graph)) {
+            if (alloc) ggml_gallocr_free(alloc);
+            throw std::runtime_error("failed to allocate the context projection");
+        }
+        ggml_backend_tensor_set(t5, cond.hidden.data(), 0, cond.hidden.size() * sizeof(float));
+        std::string error;
+        const bool ok = graph_compute_checked(lm_.backend, graph, "cond_proj", error);
+        context_.assign((size_t)c_.dim * n_ctx_ * n_seq_, 0.0f);
+        if (ok) {
+            ggml_backend_tensor_get(projected, context_.data(), 0,
+                                    (size_t)c_.dim * n_ctx_ * sizeof(float));
+        }
+        ggml_gallocr_free(alloc);
+        if (!ok) throw std::runtime_error(error);
+    }
+
     const GgufModel& lm_;
     LmConfig c_;
-    int context_width_ = 0;
+    int n_seq_ = 1;
+    bool cross_ = true;
+    int n_ctx_ = 0;
     KvCache cache_;
     ggml_gallocr_t alloc_ = nullptr;
     std::vector<uint8_t> arena_;
+    std::vector<float> context_;      // [dim, n_ctx, n_seq]; stream 1 stays zero
     std::vector<float> out_;
+    int forwards_ = 0;
 };
 
 } // namespace
@@ -161,20 +224,11 @@ std::vector<int32_t> mg_generate(const GgufModel& lm, const LmConfig& c,
     const std::vector<uint8_t> mask = pattern_mask(pattern);
 
     const bool guided = params.cfg_coef != 0.0f;
-    Stream conditioned(lm, c, S, /*context_width=*/c.cond_dim);
-    std::unique_ptr<Stream> unconditioned;
-    // The null branch's cross-attention source is all zeros -- `T5Conditioner.forward`
-    // zeroes it *after* `output_proj` -- so with no biases in the attention projections the
-    // block contributes exactly nothing and can be skipped. `--uncond-cross` builds the
-    // blocks anyway and feeds them a projected zero, which is how that claim gets checked
-    // rather than asserted. Feeding zeros to `lm.cond_proj` instead would leave its bias
-    // behind and is a different model: that mistake cost an afternoon's confusion.
-    std::vector<float> zero_context;
-    if (guided) {
-        const int width = params.uncond_cross ? c.dim : 0;
-        unconditioned.reset(new Stream(lm, c, S, width));
-        if (params.uncond_cross) zero_context.assign((size_t)c.dim * cond.tokens, 0.0f);
-    }
+    // Guidance is two streams in one forward. Without it there is one stream, and its
+    // cross-attention can be skipped outright: the null source is all zeros and the
+    // attention projections have no biases, so those blocks contribute exactly nothing.
+    const int n_seq = guided ? 2 : 1;
+    Decoder decoder(lm, c, S, n_seq, cond, /*cross_attention=*/guided);
 
     Rng rng(params.seed);
     std::vector<float> scratch;
@@ -194,17 +248,16 @@ std::vector<int32_t> mg_generate(const GgufModel& lm, const LmConfig& c,
                         sequence.data() + (size_t)q * S + previous,
                         (size_t)n_tokens * sizeof(int32_t));
 
-        const std::vector<float>& cond_logits =
-            conditioned.forward(feed.data(), n_tokens, cond.hidden, cond.tokens);
-        ++report.forwards;
-        const float* logits = cond_logits.data();
+        const std::vector<float>& out = decoder.forward(feed.data(), n_tokens);
+        const float* logits = out.data();
         if (guided) {
-            const std::vector<float>& null_logits =
-                unconditioned->forward(feed.data(), n_tokens, zero_context, cond.tokens);
-            ++report.forwards;
-            // uncond + (cond - uncond) * cfg_coef, exactly as `_sample_next_token` writes it.
+            // uncond + (cond - uncond) * cfg_coef, exactly as `_sample_next_token` writes
+            // it. Stream 0 is the conditional half of the batch, stream 1 the null one.
+            const float* cond_logits = out.data();
+            const float* null_logits = out.data() + (size_t)c.card * K;
             for (size_t i = 0; i < combined.size(); ++i)
-                combined[i] = null_logits[i] + (cond_logits[i] - null_logits[i]) * params.cfg_coef;
+                combined[i] =
+                    null_logits[i] + (cond_logits[i] - null_logits[i]) * params.cfg_coef;
             logits = combined.data();
         }
 
@@ -237,6 +290,8 @@ std::vector<int32_t> mg_generate(const GgufModel& lm, const LmConfig& c,
         if (progress) progress(1 + offset - start, S - start);
     }
     report.decode_seconds = now_s() - t0;
+    report.forwards = decoder.forwards();
+    report.cache_bytes = decoder.cache_bytes();
 
     std::vector<int32_t> out =
         revert_pattern_sequence(pattern, sequence.data(), (int32_t)c.special_token_id);

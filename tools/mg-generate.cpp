@@ -73,9 +73,6 @@ void usage() {
         "  --temperature <f>        sampling temperature (default 1.0)\n"
         "  --cfg-coef <f>           guidance (default: the model's; 0 disables it)\n"
         "  --seed <n>               sampling seed (default 1234; not torch's stream)\n"
-        "  --uncond-cross           give the null branch an explicit all-zero context\n"
-        "                           instead of skipping its cross-attention; the two are\n"
-        "                           identical and this exists to prove it\n"
         "  --device <name>          backend override; also AC_DEVICE / AC_GPU / AC_THREADS\n");
 }
 
@@ -89,7 +86,7 @@ int main(int argc, char** argv) {
     int frame_rate = 50, top_k = 250;
     float temperature = 1.0f, cfg_coef = -1.0f;
     uint64_t seed = 1234;
-    bool greedy = false, uncond_cross = false;
+    bool greedy = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -115,7 +112,6 @@ int main(int argc, char** argv) {
         else if (a == "--temperature") temperature = (float)atof(next("--temperature").c_str());
         else if (a == "--cfg-coef") cfg_coef = (float)atof(next("--cfg-coef").c_str());
         else if (a == "--seed") seed = strtoull(next("--seed").c_str(), nullptr, 10);
-        else if (a == "--uncond-cross") uncond_cross = true;
         else if (a == "--device") device = next("--device");
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else { fprintf(stderr, "error: unknown argument '%s'\n", a.c_str()); usage(); return 2; }
@@ -195,7 +191,6 @@ int main(int argc, char** argv) {
         params.top_k = top_k;
         params.cfg_coef = cfg_coef >= 0.0f ? cfg_coef : c.cfg_coef;
         params.seed = seed;
-        params.uncond_cross = uncond_cross;
 
         fprintf(stderr, "[ac] lm: dim %d, %d layers, %d heads, %d codebooks of %d\n",
                 c.dim, c.layers, c.heads, c.n_q, c.card);

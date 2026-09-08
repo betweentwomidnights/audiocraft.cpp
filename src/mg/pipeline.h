@@ -5,9 +5,9 @@
 // rest are single tokens against a KV cache.
 //
 // Classifier-free guidance runs two streams over the same weights: one conditioned on the
-// text, one on nothing. audiocraft batches them into a single forward of batch 2; here they
-// are two forwards over two caches, which is the same arithmetic and about half the speed.
-// Batching is the first thing to fix when speed matters -- see docs/MUSICGEN_LM.md.
+// text, one on nothing. They share their tokens and differ only in the cross-attention
+// context, so both go through one forward as a batch of two -- which is what audiocraft
+// does, and what the KV cache's sequence axis is for.
 #pragma once
 
 #include "gguf_model.h"
@@ -31,12 +31,10 @@ struct GenerateParams {
     // reference that was also generated without it.
     float cfg_coef = 3.0f;
     uint64_t seed = 1234;
-    // Feed the unconditional branch an explicit all-zero context instead of skipping its
-    // cross-attention. The two are identical -- see mg/lm.h -- and this exists to prove it.
-    bool uncond_cross = false;
 };
 
 struct GenerateReport {
+    size_t cache_bytes = 0;             // both guidance streams' history
     // The combined logits of the very first prediction, [card, n_q]. The smallest thing two
     // implementations can disagree about, and the only way to tell a rounding difference
     // from a bug once greedy decoding has amplified one into a different song.

@@ -110,23 +110,24 @@ conventional form.
 vectors rather than being excluded. This is the opposite of MelodyFlow, which masks with a
 real −inf.
 
-### The null branch skips cross-attention entirely
+### Where the null branch's zeros go
 
-That second fact has a useful consequence. The unconditional branch's cross-attention source
-is all zeros, and the attention projections have no biases, so every key and value is zero,
-the softmax is uniform over zeros, and the block contributes exactly nothing to the residual.
-So `mg/pipeline.cpp` does not build those 24 blocks at all for the null stream.
+That second fact has a consequence that cost an afternoon. The unconditional branch's
+cross-attention source is all zeros — but **where** the zeroing happens matters.
+`output_proj` — which is `lm.cond_proj` here — *does* have a bias, and audiocraft zeroes
+the context *after* applying it. Feeding zeros *into* `lm.cond_proj` instead leaves its bias
+behind and is a different model, one that still generates plausible audio.
 
-**Where the zeroing happens matters, and getting it wrong cost an afternoon.** `output_proj`
-— which is `lm.cond_proj` here — *does* have a bias, and audiocraft zeroes the context
-*after* applying it. Feeding zeros into `lm.cond_proj` instead leaves its bias behind and is
-a different model. The first version of the `--uncond-cross` cross-check did exactly that,
-disagreed with the skip, and briefly looked like the skip was the bug — when in fact the skip
-matched torch and the check did not.
+So `mg/pipeline.cpp` projects the real context once and leaves the null stream's slice of
+the result at zero, which is exactly what torch does.
 
-`mg-generate --uncond-cross` now builds the blocks and feeds them a *projected* zero. Result:
-bit-identical to skipping, and both match torch. The optimization is worth about 24 of the
-model's 72 attention blocks per guided step.
+There is a tempting shortcut here that guidance batching takes away. With a genuinely
+all-zero context and no biases on the attention projections, every key and value in the null
+branch's cross-attention is zero, the softmax is uniform over zeros, and the block
+contributes nothing to the residual — so the whole thing can be skipped, saving 24 of the
+model's 72 attention blocks per guided step. That was worth doing when the streams were two
+separate forwards. Batched they share one graph, so the blocks get built either way; the
+zeros just flow through them. Batching wins by more than the skip did.
 
 ## Measured parity
 
@@ -168,17 +169,42 @@ audio is as good, not whether it is the same.
 None of which affects gary, which samples rather than decoding greedily and so produces a
 different take on every run regardless.
 
+## Guidance batching
+
+Classifier-free guidance needs two predictions per step, one conditioned on the text and one
+on nothing. They share their input tokens and their weights and differ only in what
+cross-attention reads, so they are one forward of batch 2 — which is what audiocraft does,
+and what the cache's `n_seq` axis is for.
+
+What keeps it a small change rather than a rewrite is that the two streams differ *only* in
+the cross-attention context. `lm.cond_proj` is applied once at setup into a
+`[dim, n_ctx, n_seq]` tensor whose second stream is left at zero; the token embeddings and
+positions broadcast across the batch (`ggml_add(pos_emb, x)`, positions the wider operand);
+every other tensor in the graph just grows a fourth dimension. Sampling then reads the two
+logit blocks out of one output and combines them on the host.
+
+The win is not the 2x audiocraft advertises. The arithmetic is the same either way — the
+matmuls get twice as wide instead of running twice — so what is saved is per-call overhead
+and half the graph builds, which is worth more the smaller the model and the shorter the
+step. Measured below: **1.43x on CUDA, 1.30x on CPU.**
+
+Greedy decoding makes this checkable exactly. The change touches attention layout in every
+layer, and the tokens have to stay identical or it is wrong: CPU F32 and CUDA F32 both still
+produce **6000/6000** against the torch reference.
+
 ## Speed
 
-30 s of audio: 1202 decode steps, 2406 forwards (two guidance streams). RTX 5070 Laptop
-8 GB, Core Ultra 9 275HX.
+30 s of audio: 1202 decode steps, 1203 forwards. RTX 5070 Laptop 8 GB, Core Ultra 9 275HX.
 
 | | decode | steps/s | vs torch |
 |---|---|---|---|
 | torch CUDA, fp16 + xformers (what gary runs) | 32.7 s | 37 | 1.0x |
-| audiocraft.cpp CUDA F32 | 23.8 s | 50.4 | **1.37x** |
-| audiocraft.cpp CUDA F16 | **19.3 s** | **62.4** | **1.69x** |
-| audiocraft.cpp CPU F32 | 82 s | 14.6 | 0.4x |
+| audiocraft.cpp CUDA F32 | 16.1 s | 74.8 | **2.03x** |
+| audiocraft.cpp CUDA F16 | **13.5 s** | **89.3** | **2.43x** |
+| audiocraft.cpp CPU F32 | 63.3 s | 19.0 | 0.5x |
+
+Before batching, at 2406 forwards over two caches: CUDA F32 23.8 s, CUDA F16 19.3 s, CPU F32
+82 s.
 
 **We are already faster than torch here** — unlike MelodyFlow, where we are 2x behind. The
 difference is what each side is good at: MelodyFlow is 750-token full-sequence forwards where
@@ -186,9 +212,10 @@ xformers' fused attention dominates, while MusicGen is single-token steps where 
 overhead dominates and ggml's is lower. torch's number includes the codec decode (well under
 a second of it); ours excludes model loading, which is another 1-3 s.
 
-The obvious remaining win is **batching the two guidance streams into one forward**.
-audiocraft does exactly that and calls it "about x2 faster"; here they are two sequential
-forwards over two caches. That plus an F16 KV cache is where Phase 6 should start.
+The remaining wins are an **F16 KV cache** — 591 MB is most of what an 8 GB card has to
+spare, and halving it also halves the bandwidth attention reads every step — and quantized
+weights, which nothing has tried yet.
+
 
 ## Reproducing
 
@@ -227,11 +254,11 @@ seven minutes on CPU.
   not gary's endpoint.
 - **`--frame-rate` is a flag with a default of 50.** It belongs to the codec, and Phase 5
   should read it from the EnCodec GGUF rather than trusting an argument.
-- **No `gary-server` yet.** Phase 6 owns `:8000`, the job queue and the `session_id` polling.
+- **The service is `musicgen-server`**; see [docs/SERVICES.md](SERVICES.md).
 - **Model coverage.** Only `thepatch/vanya_ai_dnb_0.1` (small) has been converted and run.
   The converter is driven entirely by `xp.cfg` and rejects anything it does not recognise, so
   medium and large should convert unchanged — but "should" is not "did".
-- **Speed.** Guidance batching and an F16 cache, per above.
+- **Speed.** An F16 KV cache and quantized tiers, per above.
 
 ## Deferred
 
