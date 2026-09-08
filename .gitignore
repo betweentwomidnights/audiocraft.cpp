@@ -7,10 +7,11 @@ build-*/
 __pycache__/
 *.pyc
 
-# model artifacts and parity data
+# model artifacts and parity data. The convention throughout is ref*/ for a torch dump and
+# cpp*/ for ours, compared with tools/cossim.py -- both are scratch.
 models/
-refdata*/
-cppout*/
+ref*/
+cpp*/
 *.gguf
 *.wav
 *.f32

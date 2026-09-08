@@ -198,16 +198,18 @@ int main(int argc, char** argv) {
         ggml_tensor* latent_t = ggml_new_tensor_2d(arena.ctx, GGML_TYPE_F32, seq, c.latent_dim);
         ggml_tensor* cond_t = ggml_new_tensor_2d(arena.ctx, GGML_TYPE_F32, c.cond_dim, tokens);
         ggml_tensor* tfeat_t = ggml_new_tensor_1d(arena.ctx, GGML_TYPE_F32, c.time_dim);
+        ggml_tensor* rescale_t = ggml_new_tensor_2d(arena.ctx, GGML_TYPE_F32, c.latent_dim, 1);
         ggml_tensor* pos_t = ggml_new_tensor_1d(arena.ctx, GGML_TYPE_I32, seq);
         // The mask covers the zero-attention key plus every text token, for each query.
         ggml_tensor* mask_t = uncond
             ? ggml_new_tensor_2d(arena.ctx, GGML_TYPE_F32, tokens + 1, seq)
             : nullptr;
-        for (ggml_tensor* x : {latent_t, cond_t, tfeat_t, pos_t}) ggml_set_input(x);
+        for (ggml_tensor* x : {latent_t, cond_t, tfeat_t, rescale_t, pos_t}) ggml_set_input(x);
         if (mask_t) ggml_set_input(mask_t);
 
         ggml_tensor* velocity = ggml_cont(arena.ctx,
-            ac::dit_forward(arena.ctx, dit, latent_t, t, tfeat_t, cond_t, pos_t, mask_t, c));
+            ac::dit_forward(arena.ctx, dit, latent_t, rescale_t, tfeat_t, cond_t, pos_t,
+                            mask_t, c));
         ggml_set_output(velocity);
         ggml_cgraph* graph = ggml_new_graph_custom(arena.ctx, ac::dit_graph_nodes(c), false);
         ggml_build_forward_expand(graph, velocity);
@@ -225,6 +227,8 @@ int main(int argc, char** argv) {
         ggml_backend_tensor_set(latent_t, latent.data(), 0, latent.size() * sizeof(float));
         ggml_backend_tensor_set(cond_t, cond.data(), 0, cond.size() * sizeof(float));
         ggml_backend_tensor_set(tfeat_t, tfeat.data(), 0, tfeat.size() * sizeof(float));
+        const std::vector<float> rescale((size_t)c.latent_dim, ac::dit_input_rescale(t));
+        ggml_backend_tensor_set(rescale_t, rescale.data(), 0, rescale.size() * sizeof(float));
         ggml_backend_tensor_set(pos_t, positions.data(), 0, positions.size() * sizeof(int32_t));
         if (mask_t) {
             // log(0) for every real key, 0 for the zero key -- which is what

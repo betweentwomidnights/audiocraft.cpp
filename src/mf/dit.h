@@ -150,14 +150,18 @@ inline ggml_tensor* dit_block(ggml_context* ctx, const GgufModel& W, const std::
 // encoder, projected here by dit.cond_proj. `cross_mask` is additive [ctx + 1, seq], or
 // null when every text token is valid.
 inline ggml_tensor* dit_forward(ggml_context* ctx, const GgufModel& W, ggml_tensor* latent,
-                                float t, ggml_tensor* t_feat, ggml_tensor* t5_hidden,
-                                ggml_tensor* pos, ggml_tensor* cross_mask,
-                                const DitConfig& c) {
+                                ggml_tensor* rescale, ggml_tensor* t_feat,
+                                ggml_tensor* t5_hidden, ggml_tensor* pos,
+                                ggml_tensor* cross_mask, const DitConfig& c) {
     // FlowModel.forward rescales the input so its standard deviation stays 1 whatever the
-    // flow step: x = z / sqrt(t^2 + (1 - t)^2).
-    const float rescale = 1.0f / std::sqrt(t * t + (1.0f - t) * (1.0f - t));
+    // flow step. `rescale` is an input rather than a baked-in constant so that a whole solve
+    // -- 125 forwards for terry -- runs on one graph and one allocation.
+    //
+    // It carries one value, repeated `latent_dim` times: ggml broadcasts a second operand
+    // over the higher dimensions but expects ne0 to match, so a genuine 1-element scalar
+    // multiplies only the first channel and silently leaves the rest untouched.
     ggml_tensor* x = ggml_cont(ctx, ggml_transpose(ctx, latent));   // [latent_dim, seq]
-    x = ggml_mul_mat(ctx, W.get("dit.in_proj.weight"), ggml_scale(ctx, x, rescale));
+    x = ggml_mul_mat(ctx, W.get("dit.in_proj.weight"), ggml_mul(ctx, x, rescale));
 
     // TimestepEmbedding: sinusoidal features -> Linear -> SiLU -> Linear, no biases.
     ggml_tensor* t_emb = ggml_mul_mat(ctx, W.get("dit.time_embed.0.weight"), t_feat);
@@ -192,6 +196,12 @@ inline ggml_tensor* dit_forward(ggml_context* ctx, const GgufModel& W, ggml_tens
     // FlowModel scales the output by sqrt(2) so the DiT's output std stays 1.
     x = ggml_scale(ctx, x, std::sqrt(2.0f));
     return ggml_cont(ctx, ggml_transpose(ctx, x));                   // [seq, latent_dim]
+}
+
+// The value `rescale` carries: x = z / sqrt(t^2 + (1 - t)^2), flow.py:277. It goes into a
+// [latent_dim] tensor -- see dit_forward.
+inline float dit_input_rescale(float t) {
+    return 1.0f / std::sqrt(t * t + (1.0f - t) * (1.0f - t));
 }
 
 // A safe graph size for one velocity prediction.

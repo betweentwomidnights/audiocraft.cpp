@@ -13,11 +13,13 @@
 // can be tested without a checkpoint.
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ac {
@@ -188,6 +190,180 @@ inline std::vector<float> noise_regularization(std::vector<float> velocity,
     for (int i = 0; i < num_reg_steps; ++i)
         kl_regularization_step(velocity, reference, channels, frames, lambda_kl);
     return velocity;
+}
+
+// --- the solver itself -------------------------------------------------------------------
+
+// Predicts the velocity field at flow step `t` for one [channels, frames] sequence, with
+// classifier-free guidance already folded in. Everything expensive lives behind this.
+using VelocityFn = std::function<void(const float* sequence, float t, float* velocity)>;
+
+// Fills `n` floats with standard normal noise. Only the regularized (inversion) pass needs
+// one. Injecting it rather than owning it is what makes exact parity testable: torch's
+// stream cannot be reproduced here, so both sides read the same dump instead.
+using NoiseFn = std::function<void(float* dst, size_t n)>;
+
+using ProgressFn = std::function<void(int done, int total)>;
+
+// `FlowModel.generate`, transcribed.
+//
+// `prompt` is the starting sequence, already normalized by latent_mean/latent_std, in ggml
+// order ([frames, channels] -- channel-major, so index `c * frames + t`). It is also the
+// anchor the regularizing sequence is drawn towards, which is why it stays live for the
+// whole solve rather than just seeding `gen`.
+//
+// Two things here look like mistakes and are not:
+//   * when regularizing, every forward is evaluated at `schedule[idx + 1]`, not at the
+//     current flow step;
+//   * the step taken at the end of a regularized step uses the *moving average* of the
+//     regularized velocities, while the inner iterations each step from `gen` using the
+//     latest one.
+inline std::vector<float> flow_solve(FlowParams p,
+                                     const std::vector<float>& prompt,
+                                     int channels, int frames,
+                                     const VelocityFn& predict,
+                                     const NoiseFn& noise_fn = {},
+                                     const ProgressFn& progress = {}) {
+    const size_t n = (size_t)channels * frames;
+    if (prompt.size() != n)
+        throw std::runtime_error("prompt does not hold channels * frames values");
+    if (p.regularize && p.solver == FlowSolverKind::Midpoint)
+        throw std::runtime_error("latent regularization only works with the euler solver");
+    if (p.keep_last_k_iters > p.regularize_iters)
+        throw std::runtime_error("keep_last_k_iters cannot exceed regularize_iters");
+    if (!p.regularize) { p.regularize_iters = 1; p.keep_last_k_iters = 0; }
+    if (p.regularize && !noise_fn)
+        throw std::runtime_error("a regularized solve needs a noise source");
+
+    const int threshold = p.regularize_iters - p.keep_last_k_iters;
+    // Weight of iteration jdx in the moving average: jdx / (k * threshold + sum(range(k))).
+    // That denominator is exactly the sum of the numerators, so the weights sum to 1.
+    double denom = 0.0;
+    if (p.regularize) {
+        denom = (double)p.keep_last_k_iters * threshold +
+                (double)p.keep_last_k_iters * (p.keep_last_k_iters - 1) / 2.0;
+        // keep_last_k_iters = 0 leaves the average at zero and the solve takes no step at
+        // all; (1, 1) makes the only weight 0/0. audiocraft guards neither.
+        if (denom == 0.0)
+            throw std::runtime_error("regularize needs keep_last_k_iters >= 1 and "
+                                     "regularize_iters > keep_last_k_iters");
+    }
+
+    const std::vector<float> schedule = flow_schedule(p);
+    const int total = p.steps * p.regularize_iters;
+
+    std::vector<float> gen = prompt;
+    std::vector<float> next;                       // the midpoint solver's half step
+    std::vector<float> avg(p.regularize ? n : 0, 0.0f);
+    std::vector<float> input(n), velocity(n), reg_seq(n), reg_vel(n), noise(n);
+
+    for (int idx = 0; idx < p.steps; ++idx) {
+        const float t_now = schedule[(size_t)idx];
+        const float t_next = schedule[(size_t)idx + 1];
+        const float delta_t = t_next - t_now;
+        // Regularized steps evaluate the field at the step they are heading for.
+        const float t_eval = p.regularize ? t_next : t_now;
+
+        if (p.solver == FlowSolverKind::Midpoint && idx % 2 == 1) {
+            if (next.size() != n) throw std::runtime_error("midpoint half step is missing");
+            input = next;
+        } else {
+            input = gen;
+        }
+
+        for (int jdx = 0; jdx < p.regularize_iters; ++jdx) {
+            const bool compute_kl = jdx >= threshold;
+            if (compute_kl) {
+                // A fresh sample from the flow path at t_next, anchored on the prompt. The
+                // second, tiny noise term is audiocraft's; it keeps the two sequences from
+                // ever coinciding exactly, which would make the KL gradient degenerate.
+                noise_fn(noise.data(), n);
+                for (size_t i = 0; i < n; ++i)
+                    reg_seq[i] = (1.0f - t_next) * noise[i] + t_next * prompt[i];
+                noise_fn(noise.data(), n);
+                for (size_t i = 0; i < n; ++i) reg_seq[i] += 1.0e-5f * noise[i];
+            }
+            predict(input.data(), t_eval, velocity.data());
+            if (compute_kl) {
+                predict(reg_seq.data(), t_eval, reg_vel.data());
+                velocity = noise_regularization(std::move(velocity), reg_vel, channels, frames,
+                                                p.lambda_kl, 4);
+                const double w = (double)jdx / denom;
+                for (size_t i = 0; i < n; ++i) avg[i] += (float)((double)velocity[i] * w);
+            }
+            // Every inner iteration re-steps from `gen`, not from the previous iterate.
+            for (size_t i = 0; i < n; ++i) input[i] = gen[i] + velocity[i] * delta_t;
+            if (progress) progress(1 + idx * p.regularize_iters + jdx, total);
+        }
+
+        if (p.regularize) {
+            velocity = avg;
+            std::fill(avg.begin(), avg.end(), 0.0f);
+        }
+        if (p.solver == FlowSolverKind::Midpoint) {
+            if (idx % 2 == 0) {
+                next.resize(n);
+                for (size_t i = 0; i < n; ++i) next[i] = gen[i] + velocity[i] * delta_t;
+            } else {
+                const float span = t_next - schedule[(size_t)idx - 1];
+                for (size_t i = 0; i < n; ++i) gen[i] += velocity[i] * span;
+            }
+        } else {
+            for (size_t i = 0; i < n; ++i) gen[i] += velocity[i] * delta_t;
+        }
+    }
+    return gen;
+}
+
+// --- edit: an inversion followed by a generation -----------------------------------------
+
+// `MelodyFlow.edit`'s two solves. The source audio's latent is integrated backwards to
+// `target_flowstep` with no conditioning and no guidance, then forwards again to 1.0 under
+// the target prompt. `target_flowstep` is the pivot: 0 discards the source entirely, 1
+// keeps it, and terry's presets sit between 0.05 and 0.2.
+struct EditParams {
+    FlowSolverKind solver = FlowSolverKind::Euler;
+    int steps = 25;
+    float target_flowstep = 0.12f;
+    bool regularize = true;
+    int regularize_iters = 2;
+    int keep_last_k_iters = 1;
+    float lambda_kl = 0.2f;
+    float cfg_coef = 4.0f;
+    float sway_coefficient = -0.8f;
+};
+
+inline FlowParams edit_inversion_params(const EditParams& e) {
+    if (!(e.target_flowstep >= 0.0f && e.target_flowstep < 1.0f))
+        throw std::runtime_error("target_flowstep must be in [0, 1)");
+    FlowParams p;
+    p.solver = e.solver;
+    p.steps = e.steps;
+    p.source_flowstep = 1.0f;
+    p.target_flowstep = e.target_flowstep;
+    p.regularize = e.regularize;
+    p.regularize_iters = e.regularize_iters;
+    p.keep_last_k_iters = e.keep_last_k_iters;
+    p.lambda_kl = e.lambda_kl;
+    p.sway_coefficient = e.sway_coefficient;
+    p.cfg_coef = e.cfg_coef;      // ignored: inverting() forces guidance off
+    return p;
+}
+
+inline FlowParams edit_generation_params(const EditParams& e) {
+    FlowParams p = edit_inversion_params(e);
+    p.source_flowstep = e.target_flowstep;
+    p.target_flowstep = 1.0f;
+    // `edit` pops `regularize` before the second call, so the constructor default applies.
+    p.regularize = false;
+    return p;
+}
+
+// The DiT evaluations one `edit` costs, inversion plus generation. terry's settings give
+// 75 + 50 = 125.
+inline int edit_forward_count(const EditParams& e) {
+    return flow_forward_count(edit_inversion_params(e)) +
+           flow_forward_count(edit_generation_params(e));
 }
 
 } // namespace ac

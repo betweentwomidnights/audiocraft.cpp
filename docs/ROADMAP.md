@@ -19,8 +19,8 @@ de-risking the shared SEANet/LSTM work before MusicGen's incremental-decode prob
 | 0 | repo, ggml pin, shared headers, T5-base encoder + tokenizer | `ac-textenc` matches torch at cossim ≥ 0.9999 | **done** — F32 1.000000000, F16 0.999999934 ([docs/T5.md](T5.md)) |
 | 1 | `ac/seanet.h`, `ac/lstm.h`, MelodyFlow VAE (encode + decode) | VAE round-trip matches torch on 30 s stereo | **done** — encode and decode both cossim 1.0000000 ([docs/MELODYFLOW_VAE.md](MELODYFLOW_VAE.md)) |
 | 2 | MelodyFlow DiT (RoPE, `add_zero_attn`, additive timestep, U-ViT skips) | one velocity prediction at cossim ≥ 0.9999 | **done** — F32 cossim 1.0000000 end to end ([docs/MELODYFLOW_DIT.md](MELODYFLOW_DIT.md)) |
-| 3 | sway schedule, euler/midpoint, CFG, regularized inversion | `mf-edit` reproduces terry's euler/25/0.12/2/1/0.2 | next |
-| 4 | MusicGen LM + KV cache + delay pattern + CFG + top-k | greedy 30 s generation matches token-for-token | |
+| 3 | sway schedule, euler/midpoint, CFG, regularized inversion | `mf-edit` reproduces terry's euler/25/0.12/2/1/0.2 | **done** — audio cossim 0.9999179 at 30 s ([docs/MELODYFLOW_EDIT.md](MELODYFLOW_EDIT.md)) |
+| 4 | MusicGen LM + KV cache + delay pattern + CFG + top-k | greedy 30 s generation matches token-for-token | next |
 | 5 | EnCodec 32 kHz encode + decode | `mg-generate --continue` reproduces `generate_continuation` | |
 | 6 | `terry-server` :8002, `gary-server` :8000, quantized tiers, GGUF publication | drop-in for the Python services in gary4local | |
 
@@ -58,6 +58,14 @@ no way to opt out from the calling side. That put the VAE encoder below the pari
 GPU. `feature/audiocraft-cuda-tf32-v0.17.0` adds a default-preserving `GGML_CUDA_TF32=0`
 opt-out; `sa3.cpp` and `acestep.cpp` get rebuilt and confirmed unchanged against it before
 the branch is published. See [GGML_FORK.md](GGML_FORK.md).
+
+**A sixth, found in Phase 3:** `ggml_gallocr` frees an input tensor's block as soon as its
+last consumer has run — `ggml_gallocr_free_node` exempts only `GGML_TENSOR_FLAG_OUTPUT`. A
+graph built once and executed many times therefore gets exactly one execution's use out of
+an input written at construction; after that a later node's scratch may be on top of it. The
+first forward is right and every one after it is quietly wrong. `DitRunner::predict`
+re-uploads every input before every execution and `tests/graph_reuse_test.cpp` pins the
+contract. Phase 4's KV cache depends on the same pattern.
 
 ## Parity details that are easy to get wrong
 

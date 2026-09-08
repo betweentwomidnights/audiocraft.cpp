@@ -26,7 +26,7 @@ option(AC_BUILD_TOOLS "Build the CLI tools and tests" ON)
 # sa3.cpp gates its stable-audio-tools family behind SA3_BUILD_SAT. Kept independent of
 # AC_BUILD_TOOLS so an embedding application can link a family without building any CLI.
 # Both default OFF until their phase lands; see docs/ROADMAP.md.
-option(AC_BUILD_MELODYFLOW "Build the MelodyFlow family (DiT + VAE + flow solver)" OFF)
+option(AC_BUILD_MELODYFLOW "Build the MelodyFlow family (DiT + VAE + flow solver)" ON)
 option(AC_BUILD_MUSICGEN   "Build the MusicGen family (LM + EnCodec 32kHz)"        OFF)
 
 if(AC_CUDA)
@@ -139,6 +139,11 @@ if(AC_BUILD_TOOLS)
 
     add_executable(ac-dit tools/ac-dit.cpp)
     target_link_libraries(ac-dit PRIVATE ac)
+
+    if(AC_BUILD_MELODYFLOW)
+        add_executable(mf-edit tools/mf-edit.cpp)
+        target_link_libraries(mf-edit PRIVATE ac_melodyflow)
+    endif()
 endif()
 
 # --- tests -----------------------------------------------------------------
@@ -168,6 +173,11 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     target_link_libraries(lstm_test PRIVATE ac)
     add_test(NAME lstm COMMAND lstm_test)
     set_tests_properties(lstm PROPERTIES LABELS "non-gpu;shared")
+
+    add_executable(graph_reuse_test tests/graph_reuse_test.cpp)
+    target_link_libraries(graph_reuse_test PRIVATE ac)
+    add_test(NAME graph_reuse COMMAND graph_reuse_test)
+    set_tests_properties(graph_reuse PROPERTIES LABELS "non-gpu;shared")
 
     add_executable(solver_test tests/solver_test.cpp)
     target_link_libraries(solver_test PRIVATE ac)

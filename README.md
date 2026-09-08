@@ -57,6 +57,21 @@ build/bin/Release/ac-textenc --t5 models/t5-base-encoder-0.1B-v1.0-F16.gguf \
   --prompt "80s pop track with bassy drums and synth" --out cppout/t5_hidden.f32
 ```
 
+With the MelodyFlow ggufs built too, `mf-edit` is terry's whole transform, and its defaults
+are the service's euler settings (25 steps, regularized 2/1, `lambda_kl` 0.2, guidance 4.0);
+only the per-preset `--flowstep` varies:
+
+```bash
+build/bin/Release/mf-edit \
+  --dit models/melodyflow-dit-t24-1.0B-v1.0-F32.gguf \
+  --codec models/melodyflow-vae-48khz-v1.0-F32.gguf \
+  --t5 models/t5-base-encoder-0.1B-v1.0-F32.gguf \
+  --input in.wav --prompt "a dubby reggae bassline" --out out.wav
+```
+
+See [docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md) for the parity numbers and what the
+solver does.
+
 ## Configuration
 
 Backend and paths come from environment variables, so a downstream app sets them in the
@@ -93,13 +108,16 @@ cd build && ctest -C Release --output-on-failure
 
 Parity against PyTorch is the bar. `tools/dump_*_refs.py` writes reference activations,
 the C++ tools write the same tensors as raw f32 in ggml memory order, and
-`tools/cossim.py` compares them at a 0.9999 gate. [docs/T5.md](docs/T5.md),
-[docs/MELODYFLOW_VAE.md](docs/MELODYFLOW_VAE.md) and
-[docs/MELODYFLOW_DIT.md](docs/MELODYFLOW_DIT.md) are the worked examples, and the latter two
-also record four ggml and checkpoint findings worth knowing before porting any audio model:
+`tools/cossim.py` compares them at a 0.9999 gate, and reports rms-envelope and
+log-magnitude-spectrum cosines alongside it for audio, which is the fair measure for
+precision tiers. [docs/T5.md](docs/T5.md), [docs/MELODYFLOW_VAE.md](docs/MELODYFLOW_VAE.md),
+[docs/MELODYFLOW_DIT.md](docs/MELODYFLOW_DIT.md) and
+[docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md) are the worked examples, and between them
+record five ggml and checkpoint findings worth knowing before porting any audio model:
 `ggml_conv_1d` rounds activations to F16, `ggml_gelu` is the tanh approximation, a stored
-rotary table may not equal its closed form, and an "optional" attention sink may be what
-keeps a null branch finite.
+rotary table may not equal its closed form, an "optional" attention sink may be what keeps a
+null branch finite, and a graph executed more than once must have every input re-uploaded
+before every execution.
 
 ## Credits
 
