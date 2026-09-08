@@ -12,11 +12,11 @@ covers the two services still on PyTorch there — **gary** (MusicGen
 Scope is deliberately narrow: only what those two services actually call. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-> **status: phase 2.** The shared T5-base conditioner, MelodyFlow's 48 kHz stereo SEANet
-> VAE, and MelodyFlow's 962M-parameter DiT all match the PyTorch reference exactly at F32 —
-> cossim 1.0000000, including end to end from a prompt and including classifier-free
-> guidance's null branch. Next is the ODE solver that turns those pieces into `edit()`.
-> MusicGen is still to come; the family CMake switches are off by default.
+> **status: phase 4.** terry's `edit` runs end to end — `mf-edit` reproduces the service's
+> settings at 0.9999179 on 30 s of audio, closer to torch-on-CPU than torch-on-GPU is. So
+> does gary's language model: `mg-generate` matches torch **token for token over a full 30 s
+> continuation**, 6000/6000, and decodes 1.7x faster than torch does. What is left for gary
+> is EnCodec, which turns those codes back into audio.
 
 ## Build
 
@@ -69,8 +69,18 @@ build/bin/Release/mf-edit \
   --input in.wav --prompt "a dubby reggae bassline" --out out.wav
 ```
 
-See [docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md) for the parity numbers and what the
-solver does.
+`mg-generate` is gary's language model. It needs prompt codes from the reference dumper
+until EnCodec lands in Phase 5, and `--greedy` is the mode that reproduces torch exactly:
+
+```bash
+build/bin/Release/mg-generate \
+  --lm models/musicgen-vanya-dnb-0.4B-v1.0-F16.gguf \
+  --t5 models/t5-base-encoder-0.1B-v1.0-F16.gguf \
+  --prompt "drum and bass" --duration 30 --out-codes codes.i32
+```
+
+See [docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md) and
+[docs/MUSICGEN_LM.md](docs/MUSICGEN_LM.md) for the parity numbers and what each loop does.
 
 ## Configuration
 
@@ -111,8 +121,8 @@ the C++ tools write the same tensors as raw f32 in ggml memory order, and
 `tools/cossim.py` compares them at a 0.9999 gate, and reports rms-envelope and
 log-magnitude-spectrum cosines alongside it for audio, which is the fair measure for
 precision tiers. [docs/T5.md](docs/T5.md), [docs/MELODYFLOW_VAE.md](docs/MELODYFLOW_VAE.md),
-[docs/MELODYFLOW_DIT.md](docs/MELODYFLOW_DIT.md) and
-[docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md) are the worked examples, and between them
+[docs/MELODYFLOW_DIT.md](docs/MELODYFLOW_DIT.md), [docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md)
+and [docs/MUSICGEN_LM.md](docs/MUSICGEN_LM.md) are the worked examples, and between them
 record five ggml and checkpoint findings worth knowing before porting any audio model:
 `ggml_conv_1d` rounds activations to F16, `ggml_gelu` is the tanh approximation, a stored
 rotary table may not equal its closed form, an "optional" attention sink may be what keeps a

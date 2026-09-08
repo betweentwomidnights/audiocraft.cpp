@@ -41,7 +41,7 @@ LAYOUT = {
     "mf_edit_audio":   (0, 1),  # torch [channels, samples]
 
     # --- MusicGen (phases 4-5) ---
-    "mg_lm_logits":   (0, 1),   # torch [K*card, T]
+    "mg_logits0":     (0, 1),   # torch [n_q, card]: the first prediction, guidance applied
     "mg_encodec_emb": (0, 1),   # torch [128, T]
     "mg_audio":       (0, 1),   # torch [channels, samples]
 }

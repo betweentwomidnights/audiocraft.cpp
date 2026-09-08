@@ -20,8 +20,8 @@ de-risking the shared SEANet/LSTM work before MusicGen's incremental-decode prob
 | 1 | `ac/seanet.h`, `ac/lstm.h`, MelodyFlow VAE (encode + decode) | VAE round-trip matches torch on 30 s stereo | **done** — encode and decode both cossim 1.0000000 ([docs/MELODYFLOW_VAE.md](MELODYFLOW_VAE.md)) |
 | 2 | MelodyFlow DiT (RoPE, `add_zero_attn`, additive timestep, U-ViT skips) | one velocity prediction at cossim ≥ 0.9999 | **done** — F32 cossim 1.0000000 end to end ([docs/MELODYFLOW_DIT.md](MELODYFLOW_DIT.md)) |
 | 3 | sway schedule, euler/midpoint, CFG, regularized inversion | `mf-edit` reproduces terry's euler/25/0.12/2/1/0.2 | **done** — audio cossim 0.9999179 at 30 s ([docs/MELODYFLOW_EDIT.md](MELODYFLOW_EDIT.md)) |
-| 4 | MusicGen LM + KV cache + delay pattern + CFG + top-k | greedy 30 s generation matches token-for-token | next |
-| 5 | EnCodec 32 kHz encode + decode | `mg-generate --continue` reproduces `generate_continuation` | |
+| 4 | MusicGen LM + KV cache + delay pattern + CFG + top-k | greedy 30 s generation matches token-for-token | **done** — 6000/6000 tokens, and 1.7x faster than torch ([docs/MUSICGEN_LM.md](MUSICGEN_LM.md)) |
+| 5 | EnCodec 32 kHz encode + decode | `mg-generate --continue` reproduces `generate_continuation` | next |
 | 6 | `terry-server` :8002, `gary-server` :8000, quantized tiers, GGUF publication | drop-in for the Python services in gary4local | |
 
 Deferred on purpose: MusicGen LoRA training. `sa3.cpp`'s trainer is already generic
@@ -33,8 +33,11 @@ converter for the raw audiocraft `state_dict.bin` + `xp.cfg` format matters more
 ## Two things that are net-new relative to sa3.cpp
 
 **A KV cache.** `sa3.cpp` has none — every model there is a diffusion or flow model with
-full-sequence graphs. MusicGen needs ~1500 sequential steps (×2 for CFG) over a graph built
-once and re-executed. This is the largest single piece of engineering in the project.
+full-sequence graphs. Resolved in Phase 4: `src/mg/kv_cache.h` holds K and V in a backend
+buffer of their own, with V stored *transposed* so the per-step `ggml_cont(ggml_permute(v))`
+over the whole history disappears (148 MB of copy per step at a full context). The graph is
+rebuilt every forward, which costs ~2% and keeps the attention exact. See
+[docs/MUSICGEN_LM.md](MUSICGEN_LM.md).
 
 **An LSTM.** Both codecs put a 2-layer LSTM in the SEANet bottleneck and ggml has no LSTM
 op. Resolved in Phase 1: the host-side implementation was written and measured first, spent

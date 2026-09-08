@@ -173,4 +173,21 @@ inline ggml_tensor* sdpa(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, ggml
     return ggml_mul_mat(ctx, vt, kq);                          // [d, Nq, H]
 }
 
+// Scaled-dot-product attention where V is already stored transposed as [Nk, d, H].
+//
+// `sdpa` above has to `ggml_cont(ggml_permute(v))` before the second matmul. With a KV
+// cache that transpose runs over the whole history on every decode step -- 148 MB of copy
+// per step for MusicGen at a full 30 s context -- so the cache stores V in this layout and
+// the transpose disappears entirely.
+//
+// The trade-off: `ggml_flash_attn_ext` wants V as [d, Nk, H], so a flash path for a cache
+// in this layout would have to transpose back. Nothing uses flash attention with a cache
+// yet; see docs/MUSICGEN_LM.md.
+inline ggml_tensor* sdpa_vt(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, ggml_tensor* vt,
+                            ggml_tensor* mask, float scale) {
+    ggml_tensor* kq = ggml_mul_mat(ctx, k, q);                 // [Nk, Nq, H]
+    kq = ggml_soft_max_ext(ctx, kq, mask, scale, 0.0f);        // softmax over Nk
+    return ggml_mul_mat(ctx, vt, kq);                          // [d, Nq, H]
+}
+
 } // namespace ac::nn

@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
 
         // --- text ------------------------------------------------------------------------
         double t0 = now_s();
-        const ac::TextCondition cond = ac::mf_encode_prompt(t5_path, prompt, device);
+        const ac::TextCondition cond = ac::encode_prompt(t5_path, prompt, device);
         fprintf(stderr, "[ac] t5: %d token(s) in %.3fs -- \"%s\"\n",
                 cond.tokens, now_s() - t0, prompt.c_str());
 

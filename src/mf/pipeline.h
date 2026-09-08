@@ -12,6 +12,7 @@
 // covers the part that needs the DiT.
 #pragma once
 
+#include "ac/conditioner.h"
 #include "gguf_model.h"
 #include "mf/dit.h"
 #include "mf/solver.h"
@@ -23,22 +24,9 @@
 
 namespace ac {
 
-// T5-base's last hidden state for one prompt, [cond_dim, tokens] in ggml order.
-//
-// The unconditional branch does not need one of these. `ClassifierFreeGuidanceDropout`
-// drops the text, the conditioner zeroes the embeddings *and* the mask, and the DiT then
-// masks every real key to -inf -- so cross-attention returns the zero value vector and the
-// residual is untouched, whatever the context held. Both branches therefore share this
-// tensor and differ only in the mask.
-struct TextCondition {
-    std::vector<float> hidden;
-    int tokens = 0;
-};
-
-// Runs T5-base over one prompt and releases the encoder before returning. `device` may be
-// empty for the default backend.
-TextCondition mf_encode_prompt(const std::string& t5_path, const std::string& prompt,
-                               const std::string& device);
+// The text conditioner is shared with MusicGen and lives in ac/conditioner.h; the null
+// branch does not need one, because masking every text key to -inf makes cross-attention
+// return the zero value vector whatever the context held. See DitRunner below.
 
 // A DiT wired for repeated velocity predictions at one sequence length and one conditioning.
 class DitRunner {

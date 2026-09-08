@@ -27,7 +27,7 @@ option(AC_BUILD_TOOLS "Build the CLI tools and tests" ON)
 # AC_BUILD_TOOLS so an embedding application can link a family without building any CLI.
 # Both default OFF until their phase lands; see docs/ROADMAP.md.
 option(AC_BUILD_MELODYFLOW "Build the MelodyFlow family (DiT + VAE + flow solver)" ON)
-option(AC_BUILD_MUSICGEN   "Build the MusicGen family (LM + EnCodec 32kHz)"        OFF)
+option(AC_BUILD_MUSICGEN   "Build the MusicGen family (LM + EnCodec 32kHz)"        ON)
 
 if(AC_CUDA)
     set(GGML_CUDA ON CACHE BOOL "" FORCE)
@@ -144,6 +144,11 @@ if(AC_BUILD_TOOLS)
         add_executable(mf-edit tools/mf-edit.cpp)
         target_link_libraries(mf-edit PRIVATE ac_melodyflow)
     endif()
+
+    if(AC_BUILD_MUSICGEN)
+        add_executable(mg-generate tools/mg-generate.cpp)
+        target_link_libraries(mg-generate PRIVATE ac_musicgen)
+    endif()
 endif()
 
 # --- tests -----------------------------------------------------------------
@@ -183,6 +188,16 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     target_link_libraries(solver_test PRIVATE ac)
     add_test(NAME solver COMMAND solver_test)
     set_tests_properties(solver PROPERTIES LABELS "non-gpu;melodyflow")
+
+    add_executable(pattern_test tests/pattern_test.cpp)
+    target_link_libraries(pattern_test PRIVATE ac)
+    add_test(NAME pattern COMMAND pattern_test)
+    set_tests_properties(pattern PROPERTIES LABELS "non-gpu;musicgen")
+
+    add_executable(sampling_test tests/sampling_test.cpp)
+    target_link_libraries(sampling_test PRIVATE ac)
+    add_test(NAME sampling COMMAND sampling_test)
+    set_tests_properties(sampling PROPERTIES LABELS "non-gpu;musicgen")
 
     add_executable(dit_skip_test tests/dit_skip_test.cpp)
     target_link_libraries(dit_skip_test PRIVATE ac)

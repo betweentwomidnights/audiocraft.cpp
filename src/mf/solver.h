@@ -13,6 +13,8 @@
 // can be tested without a checkpoint.
 #pragma once
 
+#include "ac/callbacks.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -198,12 +200,9 @@ inline std::vector<float> noise_regularization(std::vector<float> velocity,
 // classifier-free guidance already folded in. Everything expensive lives behind this.
 using VelocityFn = std::function<void(const float* sequence, float t, float* velocity)>;
 
-// Fills `n` floats with standard normal noise. Only the regularized (inversion) pass needs
-// one. Injecting it rather than owning it is what makes exact parity testable: torch's
-// stream cannot be reproduced here, so both sides read the same dump instead.
-using NoiseFn = std::function<void(float* dst, size_t n)>;
-
-using ProgressFn = std::function<void(int done, int total)>;
+// `NoiseFn` and `ProgressFn` come from ac/callbacks.h -- MusicGen reports progress the same
+// way and must not have to include this header to say so. Only the regularized (inversion)
+// pass consults the noise source.
 
 // `FlowModel.generate`, transcribed.
 //

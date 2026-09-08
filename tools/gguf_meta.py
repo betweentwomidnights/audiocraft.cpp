@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared GGUF `general.*` metadata stamping for the sa3.cpp converters.
+"""Shared GGUF `general.*` metadata stamping and state-dict emission for the converters.
 
 Implements the naming convention in docs/DISTRIBUTION.md so every emitted gguf carries
 the basename / version / license (and size_label where it applies) the HF cards lean on.
@@ -56,3 +56,57 @@ def add_source(w, name, organization, repo_url, revision, source_file=None):
     w.add_base_model_version(0, revision)
     if source_file:
         w.add_string("general.source.file", source_file)
+
+
+class ConversionError(ValueError):
+    pass
+
+
+class Emitter:
+    """Reads tensors out of an audiocraft state dict and writes them to a GGUFWriter.
+
+    Every tensor taken is recorded, so a converter can end with "anything left over is a
+    checkpoint I do not understand" rather than silently ignoring it -- which is how a
+    variant with an extra conditioner or a layer_scale would otherwise sail through and
+    produce plausible-but-wrong audio.
+
+    `weight=False` keeps a tensor at F32. Norms, biases and small statistics cost a
+    rounding error's worth of file size and are exactly where half precision shows.
+
+    convert_melodyflow_dit.py and convert_seanet.py predate this and carry their own
+    copies; they are validated end to end and were left alone rather than refactored
+    mid-phase.
+    """
+
+    def __init__(self, state, writer, weight_dtype):
+        import numpy as np
+        self._np = np
+        self.state = state
+        self.writer = writer
+        self.weight_dtype = weight_dtype
+        self.consumed = set()
+        self.count = 0
+        self.params = 0
+
+    def take(self, key):
+        if key not in self.state:
+            raise ConversionError(f"missing tensor: {key}")
+        self.consumed.add(key)
+        return self.state[key]
+
+    def put(self, name, array, weight=True):
+        np = self._np
+        a = np.ascontiguousarray(array.astype(self.weight_dtype if weight else np.float32))
+        self.writer.add_tensor(name, a)
+        self.count += 1
+        self.params += int(a.size)
+
+    def linear(self, dst, src, weight=True):
+        self.put(dst + ".weight", self.take(src + ".weight"), weight)
+
+    def norm(self, dst, src):
+        self.put(dst + ".weight", self.take(src + ".weight"), weight=False)
+        self.put(dst + ".bias", self.take(src + ".bias"), weight=False)
+
+    def leftovers(self):
+        return sorted(set(self.state) - self.consumed)
