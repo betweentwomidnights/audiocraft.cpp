@@ -58,6 +58,23 @@ The generation routes take `audio_data`, `model_name`, `prompt_duration` (defaul
 and `seed`. `retry_music` takes `session_id` and re-runs that session's **input** — not its
 result, which would compound the continuation.
 
+### What the prompt window ends on decides the seam
+
+`continue_music` takes the tail of the clip, and that is its whole point — but it means
+the model's last 6 s of context end wherever the user's audio happens to stop. If that lands
+in the gap between hits, the model continues the gap.
+
+Measured on a 9.7 s drum loop dragged out of gary4juce, whose final 100 ms sit at about a
+ninth of the clip's average level: every seed goes near-silent (-55 to -78 dBFS) for about a
+beat at exactly the prompt boundary, then recovers. The same clip through `process_audio`,
+whose window ends at 6.0 s on a transient at full level, walks through the seam with no dip
+at any seed.
+
+This is MusicGen's behaviour and not something the port introduced: greedy decoding on that
+clip and that window is **2400/2400 identical to torch**, so the hole is in audiocraft's own
+codes. It is worth knowing about because it looks exactly like a bug in the codec or the
+delay pattern, and it is neither — it is a weak prompt.
+
 ## Deliberate differences
 
 Three, all of them improvements rather than shortcuts.
