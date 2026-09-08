@@ -58,22 +58,26 @@ The generation routes take `audio_data`, `model_name`, `prompt_duration` (defaul
 and `seed`. `retry_music` takes `session_id` and re-runs that session's **input** — not its
 result, which would compound the continuation.
 
-### What the prompt window ends on decides the seam
+### A continuation can start with a beat of silence
 
-`continue_music` takes the tail of the clip, and that is its whole point — but it means
-the model's last 6 s of context end wherever the user's audio happens to stop. If that lands
-in the gap between hits, the model continues the gap.
+Sometimes the first second after the prompt boundary comes out near-silent at every seed,
+then recovers. It happened on a 9.7 s drum loop dragged out of gary4juce, through
+`continue_music`: -55 to -78 dBFS for about a beat, identically across three seeds, starting
+at exactly the boundary sample.
 
-Measured on a 9.7 s drum loop dragged out of gary4juce, whose final 100 ms sit at about a
-ninth of the clip's average level: every seed goes near-silent (-55 to -78 dBFS) for about a
-beat at exactly the prompt boundary, then recovers. The same clip through `process_audio`,
-whose window ends at 6.0 s on a transient at full level, walks through the seam with no dip
-at any seed.
+**It is not the port.** Greedy decoding on that clip and that window is **2400/2400 identical
+to torch**, so the hole is in audiocraft's own codes. Worth knowing, because it looks exactly
+like a bug in the codec or the delay pattern and it is neither.
 
-This is MusicGen's behaviour and not something the port introduced: greedy decoding on that
-clip and that window is **2400/2400 identical to torch**, so the hole is in audiocraft's own
-codes. It is worth knowing about because it looks exactly like a bug in the codec or the
-delay pattern, and it is neither — it is a weak prompt.
+What causes it is **not yet established.** The obvious theory — that clip ends in the gap
+between hits, so the model continues the gap — did not survive a second clip: its
+`process_audio` window ends deeper into a decay (-21 dB below the clip's rms, falling for
+250 ms, against -16 dB for the clip that gapped) and generates cleanly at every seed and
+precision. Whatever the trigger is, "the prompt fades out" is not a sufficient description of
+it, and `process_audio` is not reliably the safer window.
+
+The practical note for now: when a take opens with a hole, reach for a different seed or the
+other route before suspecting the codec.
 
 ## Deliberate differences
 
