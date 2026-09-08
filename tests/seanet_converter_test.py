@@ -74,7 +74,11 @@ def wn_convtr(state, prefix, in_ch, out_ch, kernel):
         rng.standard_normal((in_ch, out_ch, kernel), dtype=np.float32) + 1.0)
 
 
-def snake(state, prefix, channels):
+def snake(state, prefix, channels, activation="snake"):
+    """Snake owns a per-channel alpha; ELU owns nothing. The fixture has to match, or the
+    converter would be handed keys it has no reason to consume."""
+    if activation != "snake":
+        return
     state[f"{prefix}.alpha"] = np.ones((1, channels, 1), np.float32)
 
 
@@ -91,6 +95,7 @@ def fixture_state(cfg):
     s = cfg["seanet"]
     n_filters, ratios = s["n_filters"], s["ratios"]
     n_res, compress = s["n_residual_layers"], s["compress"]
+    act = s["activation"]
     state = {}
 
     # --- encoder: conv, then (residuals, act, downsample) per reversed ratio, LSTM, act, conv
@@ -101,12 +106,12 @@ def fixture_state(cfg):
         for _ in range(n_res):
             idx += 1
             p = f"encoder.model.{idx}"
-            snake(state, f"{p}.block.0", dim)
+            snake(state, f"{p}.block.0", dim, act)
             wn_conv(state, f"{p}.block.1", dim // compress, dim, s["residual_kernel_size"])
-            snake(state, f"{p}.block.2", dim // compress)
+            snake(state, f"{p}.block.2", dim // compress, act)
             wn_conv(state, f"{p}.block.3", dim, dim // compress, 1)
         idx += 1
-        snake(state, f"encoder.model.{idx}", dim)
+        snake(state, f"encoder.model.{idx}", dim, act)
         idx += 1
         wn_conv(state, f"encoder.model.{idx}", dim * 2, dim, ratio * 2)
         mult *= 2
@@ -115,7 +120,7 @@ def fixture_state(cfg):
         idx += 1
         lstm(state, f"encoder.model.{idx}", bottleneck, s["lstm"])
     idx += 1
-    snake(state, f"encoder.model.{idx}", bottleneck)
+    snake(state, f"encoder.model.{idx}", bottleneck, act)
     idx += 1
     wn_conv(state, f"encoder.model.{idx}", s["encoder"]["dimension"], bottleneck,
             s["last_kernel_size"])
@@ -129,22 +134,135 @@ def fixture_state(cfg):
     for ratio in ratios:
         dim = mult * n_filters
         idx += 1
-        snake(state, f"decoder.model.{idx}", dim)
+        snake(state, f"decoder.model.{idx}", dim, act)
         idx += 1
         wn_convtr(state, f"decoder.model.{idx}", dim, dim // 2, ratio * 2)
         for _ in range(n_res):
             idx += 1
             p = f"decoder.model.{idx}"
-            snake(state, f"{p}.block.0", dim // 2)
+            snake(state, f"{p}.block.0", dim // 2, act)
             wn_conv(state, f"{p}.block.1", dim // 2 // compress, dim // 2,
                     s["residual_kernel_size"])
-            snake(state, f"{p}.block.2", dim // 2 // compress)
+            snake(state, f"{p}.block.2", dim // 2 // compress, act)
             wn_conv(state, f"{p}.block.3", dim // 2, dim // 2 // compress, 1)
         mult //= 2
     idx += 1
-    snake(state, f"decoder.model.{idx}", n_filters)
+    snake(state, f"decoder.model.{idx}", n_filters, act)
     idx += 1
     wn_conv(state, f"decoder.model.{idx}", s["channels"], n_filters, s["last_kernel_size"])
+    return state
+
+
+# --- the HuggingFace dialect -----------------------------------------------------------
+#
+# MusicGen's codec arrives as `transformers.EncodecModel`, which is a faithful port of the
+# same SEANet under different names. The fixtures below are the same miniature topology
+# spelled HF's way, which is what makes the cross-dialect test below meaningful: one schema,
+# two readers, and if either drifts the emitted names stop matching.
+
+
+def hf_config(**overrides):
+    """A miniature EnCodec, matching `config()`'s topology exactly."""
+    cfg = {
+        "model_type": "encodec", "audio_channels": 2, "num_filters": 2,
+        "num_residual_layers": 1, "upsampling_ratios": [4, 2], "kernel_size": 7,
+        "residual_kernel_size": 3, "last_kernel_size": 7, "dilation_growth_rate": 2,
+        "compress": 2, "num_lstm_layers": 2, "hidden_size": 4, "codebook_dim": 4,
+        "codebook_size": 8, "sampling_rate": 16, "norm_type": "weight_norm",
+        "pad_mode": "reflect", "use_causal_conv": False, "use_conv_shortcut": False,
+        "normalize": False, "chunk_length_s": None, "trim_right_ratio": 1.0,
+        # 8 codes is 3 bits per codebook; at 2 Hz two codebooks is 12 bits/s = 0.012 kbps.
+        "target_bandwidths": [0.012],
+    }
+    cfg.update(overrides)
+    return cfg
+
+
+def hf_conv(state, prefix, out_ch, in_ch, kernel):
+    """HF stores weight norm in the legacy `weight_g`/`weight_v` form."""
+    rng = np.random.default_rng(abs(hash(prefix)) % (2**32))
+    state[f"{prefix}.conv.bias"] = rng.standard_normal(out_ch, dtype=np.float32)
+    state[f"{prefix}.conv.weight_g"] = rng.standard_normal((out_ch, 1, 1), np.float32) + 2.0
+    state[f"{prefix}.conv.weight_v"] = (
+        rng.standard_normal((out_ch, in_ch, kernel), dtype=np.float32) + 1.0)
+
+
+def hf_convtr(state, prefix, in_ch, out_ch, kernel):
+    """ConvTranspose1d: the weight is [in, out, k] and weight_g is per *input* channel."""
+    rng = np.random.default_rng(abs(hash(prefix)) % (2**32))
+    state[f"{prefix}.conv.bias"] = rng.standard_normal(out_ch, dtype=np.float32)
+    state[f"{prefix}.conv.weight_g"] = rng.standard_normal((in_ch, 1, 1), np.float32) + 2.0
+    state[f"{prefix}.conv.weight_v"] = (
+        rng.standard_normal((in_ch, out_ch, kernel), dtype=np.float32) + 1.0)
+
+
+def hf_lstm(state, prefix, hidden, layers):
+    for layer in range(layers):
+        state[f"{prefix}.lstm.weight_ih_l{layer}"] = np.zeros((4 * hidden, hidden), np.float32)
+        state[f"{prefix}.lstm.weight_hh_l{layer}"] = np.zeros((4 * hidden, hidden), np.float32)
+        state[f"{prefix}.lstm.bias_ih_l{layer}"] = np.zeros(4 * hidden, np.float32)
+        state[f"{prefix}.lstm.bias_hh_l{layer}"] = np.zeros(4 * hidden, np.float32)
+
+
+def hf_fixture_state(config, n_q=2):
+    """The state dict `transformers.EncodecModel` produces for `hf_config()`."""
+    n_filters = config["num_filters"]
+    ratios = config["upsampling_ratios"]
+    n_res, compress = config["num_residual_layers"], config["compress"]
+    state = {}
+
+    idx, mult = 0, 1
+    hf_conv(state, f"encoder.layers.{idx}", n_filters, config["audio_channels"],
+            config["kernel_size"])
+    for ratio in reversed(ratios):
+        dim = mult * n_filters
+        for _ in range(n_res):
+            idx += 1
+            p = f"encoder.layers.{idx}"
+            hf_conv(state, f"{p}.block.1", dim // compress, dim,
+                    config["residual_kernel_size"])
+            hf_conv(state, f"{p}.block.3", dim, dim // compress, 1)
+        idx += 2                                    # the ELU owns a slot but no parameters
+        hf_conv(state, f"encoder.layers.{idx}", dim * 2, dim, ratio * 2)
+        mult *= 2
+    bottleneck = mult * n_filters
+    if config["num_lstm_layers"]:
+        idx += 1
+        hf_lstm(state, f"encoder.layers.{idx}", bottleneck, config["num_lstm_layers"])
+    idx += 2
+    hf_conv(state, f"encoder.layers.{idx}", config["hidden_size"], bottleneck,
+            config["last_kernel_size"])
+
+    idx, mult = 0, 2 ** len(ratios)
+    hf_conv(state, f"decoder.layers.{idx}", mult * n_filters, config["hidden_size"],
+            config["kernel_size"])
+    if config["num_lstm_layers"]:
+        idx += 1
+        hf_lstm(state, f"decoder.layers.{idx}", mult * n_filters, config["num_lstm_layers"])
+    for ratio in ratios:
+        dim = mult * n_filters
+        idx += 2
+        hf_convtr(state, f"decoder.layers.{idx}", dim, dim // 2, ratio * 2)
+        for _ in range(n_res):
+            idx += 1
+            p = f"decoder.layers.{idx}"
+            hf_conv(state, f"{p}.block.1", dim // 2 // compress, dim // 2,
+                    config["residual_kernel_size"])
+            hf_conv(state, f"{p}.block.3", dim // 2, dim // 2 // compress, 1)
+        mult //= 2
+    idx += 2
+    hf_conv(state, f"decoder.layers.{idx}", config["audio_channels"], n_filters,
+            config["last_kernel_size"])
+
+    for i in range(n_q):
+        p = f"quantizer.layers.{i}.codebook"
+        rng = np.random.default_rng(1000 + i)
+        state[f"{p}.embed"] = rng.standard_normal(
+            (config["codebook_size"], config["codebook_dim"]), dtype=np.float32)
+        # EMA bookkeeping from training. The converter must drop these by name.
+        state[f"{p}.embed_avg"] = state[f"{p}.embed"].copy()
+        state[f"{p}.cluster_size"] = np.ones(config["codebook_size"], np.float32)
+        state[f"{p}.inited"] = np.ones(1, np.float32)
     return state
 
 
@@ -242,10 +360,106 @@ class SeanetConverterTest(unittest.TestCase):
         self.assertEqual(kv["ac.codec.lstm_layers"], 0)
         self.assertFalse(any(n.startswith("codec.encoder.lstm") for n in names))
 
-    def test_rejects_rvq_for_now(self):
-        cfg = config(**{"encodec.quantizer": "rvq"})
+    def convert_hf(self, state, config):
+        """Run the converter against an in-memory HuggingFace checkpoint."""
+        original = convert_seanet.load_source
+        convert_seanet.load_source = lambda src: (
+            state, convert_seanet.read_hf_spec(config), convert_seanet.HuggingFaceDialect())
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / "codec.gguf"
+                result = convert_seanet.convert("ignored", out)
+                reader = GGUFReader(str(out))
+                kv = {key: field.contents() for key, field in reader.fields.items()}
+                names = {t.name for t in reader.tensors}
+                shapes = {t.name: tuple(int(v) for v in t.shape if v) for t in reader.tensors}
+                data = {t.name: np.array(t.data, dtype=np.float32) for t in reader.tensors}
+                del reader
+                gc.collect()
+            return result, kv, names, shapes, data
+        finally:
+            convert_seanet.load_source = original
+
+    def test_hf_walks_the_module_indices(self):
+        config = hf_config()
+        result, kv, names, _, _ = self.convert_hf(hf_fixture_state(config), config)
+        self.assertEqual(kv["ac.codec.quantizer"], "rvq")
+        self.assertEqual(kv["ac.codec.activation"], "ELU")
+        self.assertEqual(kv["ac.codec.frame_rate"], 2)
+        self.assertEqual(kv["ac.codec.hop_length"], 8)
+        # 0.012 kbps / (2 Hz * log2(8)) = 2 codebooks.
+        self.assertEqual(kv["ac.codec.rvq_n_q"], 2)
+        self.assertEqual(kv["ac.codec.rvq_bins"], 8)
+        for i in range(2):
+            self.assertIn(f"codec.rvq.{i}.embed", names)
+        # ELU owns no parameters, so nothing snake-shaped may be emitted for it.
+        self.assertFalse(any(n.endswith(".alpha") for n in names))
+        self.assertEqual(result["spec"]["ratios"], [4, 2])
+
+    def test_hf_drops_the_quantizer_ema_state(self):
+        """`cluster_size`, `embed_avg` and `inited` are training bookkeeping.
+
+        They have to be dropped *by name*: leaving them unconsumed would trip the
+        converter's "unrecognized tensor" check, and consuming everything under
+        `quantizer.` by prefix would hide a genuinely new field.
+        """
+        config = hf_config()
+        state = hf_fixture_state(config)
+        self.assertIn("quantizer.layers.0.codebook.embed_avg", state)
+        _, _, names, _, _ = self.convert_hf(state, config)
+        self.assertFalse(any("embed_avg" in n or "cluster_size" in n or "inited" in n
+                             for n in names))
+
+        state["quantizer.layers.0.codebook.something_new"] = np.zeros(4, np.float32)
         with self.assertRaises(ConversionError):
-            self.convert(fixture_state(config()), cfg)
+            self.convert_hf(state, config)
+
+    def test_both_dialects_emit_the_same_schema(self):
+        """The whole point of one converter: two source formats, one set of tensor names.
+
+        `src/ac/seanet.h` reads both codecs through the same names, so if either reader
+        drifts the other model breaks silently. Held here by converting the same miniature
+        topology from both formats and comparing what came out.
+        """
+        ac_cfg = config(**{"seanet.activation": "ELU"})
+        _, _, ac_names, ac_shapes, _ = self.convert(fixture_state(ac_cfg), ac_cfg)
+        hf_cfg = hf_config()
+        _, _, hf_names, hf_shapes, _ = self.convert_hf(hf_fixture_state(hf_cfg), hf_cfg)
+
+        rvq_only = {n for n in hf_names if n.startswith("codec.rvq.")}
+        self.assertEqual(hf_names - rvq_only, ac_names)
+
+        # One shape legitimately differs, and it is the bottleneck: MelodyFlow's codec has
+        # no quantizer, so its encoder emits mean||scale at twice the latent width. Pinned
+        # rather than excused, so a change anywhere else still fails.
+        widened = {"codec.encoder.out.weight", "codec.encoder.out.bias"}
+        for name in sorted(ac_names):
+            if name in widened:
+                self.assertNotEqual(ac_shapes[name], hf_shapes[name], name)
+            else:
+                self.assertEqual(ac_shapes[name], hf_shapes[name], name)
+        self.assertEqual(ac_shapes["codec.encoder.out.bias"][0],
+                         2 * hf_shapes["codec.encoder.out.bias"][0])
+
+    def test_rejects_unsupported_hf_topology(self):
+        for override in ({"normalize": True},          # adds a per-chunk scale we do not carry
+                         {"chunk_length_s": 1.0},      # windows and overlap-adds the input
+                         {"use_causal_conv": True},
+                         {"use_conv_shortcut": True},
+                         {"norm_type": "time_group_norm"},
+                         {"pad_mode": "constant"},
+                         {"trim_right_ratio": 0.5},
+                         {"codebook_dim": 8}):         # must equal hidden_size
+            cfg = hf_config(**override)
+            with self.subTest(override=override), self.assertRaises(ConversionError):
+                self.convert_hf(hf_fixture_state(hf_config()), cfg)
+
+    def test_rejects_fractional_codebook_counts(self):
+        """`target_bandwidths` has to divide into whole codebooks; audiocraft asserts it too."""
+        cfg = hf_config(target_bandwidths=[0.031])
+        with self.assertRaises(ConversionError):
+            self.convert_hf(hf_fixture_state(hf_config()), cfg)
+
 
     def test_rejects_unsupported_topology(self):
         for override in ({"seanet.causal": True},

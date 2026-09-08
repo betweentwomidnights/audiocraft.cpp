@@ -140,6 +140,9 @@ if(AC_BUILD_TOOLS)
     add_executable(ac-dit tools/ac-dit.cpp)
     target_link_libraries(ac-dit PRIVATE ac)
 
+    add_executable(ac-encodec tools/ac-encodec.cpp)
+    target_link_libraries(ac-encodec PRIVATE ac)
+
     if(AC_BUILD_MELODYFLOW)
         add_executable(mf-edit tools/mf-edit.cpp)
         target_link_libraries(mf-edit PRIVATE ac_melodyflow)
@@ -193,6 +196,11 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     target_link_libraries(pattern_test PRIVATE ac)
     add_test(NAME pattern COMMAND pattern_test)
     set_tests_properties(pattern PROPERTIES LABELS "non-gpu;musicgen")
+
+    add_executable(codec_test tests/codec_test.cpp)
+    target_link_libraries(codec_test PRIVATE ac)
+    add_test(NAME codec COMMAND codec_test)
+    set_tests_properties(codec PROPERTIES LABELS "non-gpu;musicgen")
 
     add_executable(sampling_test tests/sampling_test.cpp)
     target_link_libraries(sampling_test PRIVATE ac)

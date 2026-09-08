@@ -21,8 +21,8 @@ de-risking the shared SEANet/LSTM work before MusicGen's incremental-decode prob
 | 2 | MelodyFlow DiT (RoPE, `add_zero_attn`, additive timestep, U-ViT skips) | one velocity prediction at cossim ≥ 0.9999 | **done** — F32 cossim 1.0000000 end to end ([docs/MELODYFLOW_DIT.md](MELODYFLOW_DIT.md)) |
 | 3 | sway schedule, euler/midpoint, CFG, regularized inversion | `mf-edit` reproduces terry's euler/25/0.12/2/1/0.2 | **done** — audio cossim 0.9999179 at 30 s ([docs/MELODYFLOW_EDIT.md](MELODYFLOW_EDIT.md)) |
 | 4 | MusicGen LM + KV cache + delay pattern + CFG + top-k | greedy 30 s generation matches token-for-token | **done** — 6000/6000 tokens, and 1.7x faster than torch ([docs/MUSICGEN_LM.md](MUSICGEN_LM.md)) |
-| 5 | EnCodec 32 kHz encode + decode | `mg-generate --continue` reproduces `generate_continuation` | next |
-| 6 | `terry-server` :8002, `gary-server` :8000, quantized tiers, GGUF publication | drop-in for the Python services in gary4local | |
+| 5 | EnCodec 32 kHz encode + decode | `mg-generate --continue` reproduces `generate_continuation` | **done** — every stage exact from a raw wav ([docs/MUSICGEN_ENCODEC.md](MUSICGEN_ENCODEC.md)) |
+| 6 | `terry-server` :8002, `gary-server` :8000, quantized tiers, GGUF publication | drop-in for the Python services in gary4local | next |
 
 Deferred on purpose: MusicGen LoRA training. `sa3.cpp`'s trainer is already generic
 (functional LoRA, gradient checkpointing, quantized-base `out_prod`), so a MusicGen target
@@ -61,6 +61,14 @@ no way to opt out from the calling side. That put the VAE encoder below the pari
 GPU. `feature/audiocraft-cuda-tf32-v0.17.0` adds a default-preserving `GGML_CUDA_TF32=0`
 opt-out; `sa3.cpp` and `acestep.cpp` get rebuilt and confirmed unchanged against it before
 the branch is published. See [GGML_FORK.md](GGML_FORK.md).
+
+**A seventh, found in Phase 5, and not a ggml one at all:** the input resampler. `sa3.cpp`'s
+linear interpolator reproduced 97% of EnCodec's RVQ codes from a 44.1 kHz file — close enough
+to look like agreement, and audibly worse besides. `resample_planar_sinc` is torchaudio's
+windowed sinc transcribed, including the detail that torchaudio computes its output length
+through a float32 and can land one sample below the exact ceiling. One sample shifts a tail
+crop, which moved a quarter of the codes. See
+[docs/MUSICGEN_ENCODEC.md](MUSICGEN_ENCODEC.md).
 
 **A sixth, found in Phase 3:** `ggml_gallocr` frees an input tensor's block as soon as its
 last consumer has run — `ggml_gallocr_free_node` exempts only `GGML_TENSOR_FLAG_OUTPUT`. A

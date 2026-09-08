@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -33,6 +34,94 @@ inline std::vector<float> resample_planar_linear(const std::vector<float>& input
             if (i0 >= n_samples - 1) { out_ch[s] = in_ch[n_samples - 1]; continue; }
             const float frac = (float)(pos - (double)i0);
             out_ch[s] = in_ch[i0] + (in_ch[i0 + 1] - in_ch[i0]) * frac;
+        }
+    }
+    return out;
+}
+
+// Bandlimited resampler for PLANAR audio, matching `torchaudio.functional.resample`.
+//
+// `resample_planar_linear` above is fine for a small ratio change and badly wrong for a
+// large one: gary's inputs arrive at 44.1 or 48 kHz and MusicGen wants 32 kHz, and linear
+// interpolation across that ratio audibly aliases. Measured, it also moves the codec's
+// output: encoding a 44.1 kHz file through the linear resampler reproduced 97.4% of torch's
+// RVQ codes, while the same audio already at 32 kHz reproduced 100%.
+//
+// The algorithm is torchaudio's `_get_sinc_resample_kernel` transcribed
+// (`sinc_interp_hann`, the default). The signal is reconstructed with a windowed sinc and
+// resampled at the new rate; because y[j + new] reuses y[j]'s filter over a source window
+// shifted by `orig`, the whole thing is one strided convolution with `new` filters.
+//
+// Rates are reduced by their GCD first, which is what keeps the filter bank small: 44100 ->
+// 32000 becomes 441 -> 320, so there are 320 filters of 459 taps rather than 32000 of them.
+inline std::vector<float> resample_planar_sinc(const std::vector<float>& input,
+                                               int n_samples, int n_ch,
+                                               int src_rate, int dst_rate, int& out_samples,
+                                               int lowpass_filter_width = 6,
+                                               double rolloff = 0.99) {
+    if (n_samples <= 0 || n_ch <= 0) { out_samples = 0; return {}; }
+    if (src_rate <= 0 || dst_rate <= 0)
+        throw std::runtime_error("invalid sample rate for resampling");
+    if (src_rate == dst_rate) { out_samples = n_samples; return input; }
+    if (lowpass_filter_width <= 0)
+        throw std::runtime_error("the low-pass filter width must be positive");
+
+    const int divisor = (int)std::gcd(src_rate, dst_rate);
+    const int orig = src_rate / divisor;
+    const int step = dst_rate / divisor;
+    const double base = std::min(orig, step) * rolloff;
+    const int width = (int)std::ceil((double)lowpass_filter_width * orig / base);
+    const int taps = 2 * width + orig;
+
+    constexpr double kPi = 3.14159265358979323846;
+    std::vector<double> kernel((size_t)step * taps);
+    const double scale = base / orig;
+    for (int j = 0; j < step; ++j) {
+        // torch builds this offset as `arange(0, -new, -1) / new`, which lands in float32
+        // before it is widened; matched here so the kernels agree to the last bit rather
+        // than to 1e-7.
+        const double offset = (double)((float)(-j) / (float)step);
+        for (int k = 0; k < taps; ++k) {
+            double t = (offset + (double)(-width + k) / orig) * base;
+            t = std::max(-(double)lowpass_filter_width,
+                         std::min((double)lowpass_filter_width, t));
+            const double w = std::cos(t * kPi / lowpass_filter_width / 2.0);
+            t *= kPi;
+            const double sinc = (t == 0.0) ? 1.0 : std::sin(t) / t;
+            kernel[(size_t)j * taps + k] = (double)(float)(sinc * w * w * scale);
+        }
+    }
+
+    // The source is zero-padded by `width` on the left and `width + orig` on the right, so
+    // every output tap sees a full filter.
+    const int windows = n_samples / orig + 1;
+    // torchaudio truncates to `ceil(new * length / orig)` -- but it computes that through
+    // `torch.as_tensor(...)`, which makes a **float32**, so the ratio loses its fraction
+    // before the ceiling is taken and the result can be one sample short of the true
+    // ceiling. On a 123 s 44.1 kHz file it is: 3949715.011 rounds to 3949715.0 at single
+    // precision and ceil leaves it there. One sample does not sound like anything, but it
+    // shifts a tail crop by one and that changed 25% of the RVQ codes when this was matched
+    // to the exact ceiling instead.
+    const long long target =
+        (long long)std::ceil((double)(float)((double)step * n_samples / orig));
+    out_samples = (int)std::min((long long)windows * step, target);
+
+    std::vector<float> out((size_t)out_samples * n_ch, 0.0f);
+    for (int c = 0; c < n_ch; ++c) {
+        const float* in_ch = input.data() + (size_t)c * n_samples;
+        float* out_ch = out.data() + (size_t)c * out_samples;
+        for (int m = 0; m < windows; ++m) {
+            const int start = m * orig - width;          // index into the unpadded signal
+            const int lo = std::max(0, -start);
+            const int hi = std::min(taps, n_samples - start);
+            for (int j = 0; j < step; ++j) {
+                const long long at = (long long)m * step + j;
+                if (at >= out_samples) break;
+                const double* row = kernel.data() + (size_t)j * taps;
+                double acc = 0.0;
+                for (int k = lo; k < hi; ++k) acc += (double)in_ch[start + k] * row[k];
+                out_ch[at] = (float)acc;
+            }
         }
     }
     return out;

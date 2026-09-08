@@ -105,11 +105,14 @@ def main():
     try:
         if args.input:
             waveform, sr = torchaudio.load(args.input)
-            # gary reduces to mono and takes the tail of the track as the prompt.
-            if waveform.shape[0] > 1:
-                waveform = waveform.mean(dim=0, keepdim=True)
+            # gary's order, which is not the obvious one: `resample_for_model` runs on the
+            # track as loaded, and `safe_musicgen_continuation_v2` mixes to mono after.
+            # Resampling a mono mix is not the same computation as mixing two resampled
+            # channels, and the difference is large enough to move RVQ codes.
             if sr != model.sample_rate:
                 waveform = torchaudio.functional.resample(waveform, sr, model.sample_rate)
+            if waveform.shape[0] > 1:
+                waveform = waveform.mean(dim=0, keepdim=True)
             take = int(args.prompt_duration * model.sample_rate)
             waveform = waveform[..., -take:] if waveform.shape[-1] > take else waveform
             torchaudio.save(str(out_dir / "mg_prompt.wav"), waveform, model.sample_rate,

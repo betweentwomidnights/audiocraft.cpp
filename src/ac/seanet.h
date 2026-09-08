@@ -47,8 +47,12 @@ struct SeanetConfig {
     int sample_rate = 48000;
     int hop_length = 1920;
     int frame_rate = 25;
+    // Only meaningful when quantizer == "rvq"; see mg/encodec.h.
+    int rvq_n_q = 0;
+    int rvq_bins = 0;
 
     bool snake() const { return activation == "snake"; }
+    bool rvq() const { return quantizer == "rvq"; }
 
     // Channel count entering the bottleneck: n_filters doubled once per ratio.
     int bottleneck_channels() const {
@@ -78,6 +82,10 @@ struct SeanetConfig {
         c.encoder_dim          = (int)m.u32("ac.codec.encoder_dim");
         c.sample_rate          = (int)m.u32("ac.codec.sample_rate");
         c.hop_length           = (int)m.u32("ac.codec.hop_length");
+        if (m.string("ac.codec.quantizer") == "rvq") {
+            c.rvq_n_q  = (int)m.u32("ac.codec.rvq_n_q");
+            c.rvq_bins = (int)m.u32("ac.codec.rvq_bins");
+        }
         c.frame_rate           = (int)m.u32("ac.codec.frame_rate");
         for (int32_t r : m.i32s("ac.codec.ratios")) c.ratios.push_back((int)r);
         if (c.ratios.empty()) throw gguf_error("codec has no ratios");

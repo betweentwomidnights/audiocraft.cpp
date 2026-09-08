@@ -42,8 +42,9 @@ LAYOUT = {
 
     # --- MusicGen (phases 4-5) ---
     "mg_logits0":     (0, 1),   # torch [n_q, card]: the first prediction, guidance applied
-    "mg_encodec_emb": (0, 1),   # torch [128, T]
-    "mg_audio":       (0, 1),   # torch [channels, samples]
+    "mg_codec_latent":    (0, 1),   # torch [dim, frames], before quantization
+    "mg_codec_quantized": (0, 1),   # torch [dim, frames], what the codes decode to
+    "mg_codec_audio":     (0, 1),   # torch [channels, samples]
 }
 
 
@@ -103,7 +104,10 @@ def main():
         rp, cp = ref_dir / f"{name}.npy", cpp_dir / f"{name}.f32"
         if not cp.exists() or not rp.exists():
             continue
-        ref = np.transpose(load_ref(rp), axes).ravel()
+        ref = load_ref(rp)
+        # Mono audio collapses to one dimension once the batch axis is dropped, and there
+        # is nothing to transpose then. MusicGen's codec is the first mono model here.
+        ref = (np.transpose(ref, axes) if ref.ndim == len(axes) else ref).ravel()
         cpp = np.fromfile(cp, dtype=np.float32).astype(np.float64)
         if ref.size != cpp.size:
             print(f"  !! {name:18s} SIZE MISMATCH ref={ref.size} cpp={cpp.size}")

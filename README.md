@@ -12,11 +12,12 @@ covers the two services still on PyTorch there — **gary** (MusicGen
 Scope is deliberately narrow: only what those two services actually call. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-> **status: phase 4.** terry's `edit` runs end to end — `mf-edit` reproduces the service's
-> settings at 0.9999179 on 30 s of audio, closer to torch-on-CPU than torch-on-GPU is. So
-> does gary's language model: `mg-generate` matches torch **token for token over a full 30 s
-> continuation**, 6000/6000, and decodes 1.7x faster than torch does. What is left for gary
-> is EnCodec, which turns those codes back into audio.
+> **status: phase 5.** Both models run end to end and both match the PyTorch reference.
+> `mf-edit` reproduces terry's settings at 0.9999179 on 30 s of audio — closer to
+> torch-on-CPU than torch-on-GPU is. `mg-generate` is gary's whole transform, wav in and wav
+> out, and reproduces torch **token for token from a raw 44.1 kHz file**: 6000/6000 codes
+> over a 30 s continuation, with the decoded audio at cossim 1.0000000. It is also faster
+> than torch on both CPU and GPU. What is left is the two HTTP services.
 
 ## Build
 
@@ -69,18 +70,22 @@ build/bin/Release/mf-edit \
   --input in.wav --prompt "a dubby reggae bassline" --out out.wav
 ```
 
-`mg-generate` is gary's language model. It needs prompt codes from the reference dumper
-until EnCodec lands in Phase 5, and `--greedy` is the mode that reproduces torch exactly:
+`mg-generate` is gary's whole transform — continue a track for 30 s, conditioned on a
+description. `--greedy` is the mode that reproduces torch exactly; leave it off for the
+sampling gary actually uses:
 
 ```bash
 build/bin/Release/mg-generate \
   --lm models/musicgen-vanya-dnb-0.4B-v1.0-F16.gguf \
   --t5 models/t5-base-encoder-0.1B-v1.0-F16.gguf \
-  --prompt "drum and bass" --duration 30 --out-codes codes.i32
+  --codec models/encodec-32khz-v1.0-F32.gguf \
+  --input in.wav --prompt "drum and bass" --duration 30 --out out.wav
 ```
 
-See [docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md) and
-[docs/MUSICGEN_LM.md](docs/MUSICGEN_LM.md) for the parity numbers and what each loop does.
+See [docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md),
+[docs/MUSICGEN_LM.md](docs/MUSICGEN_LM.md) and
+[docs/MUSICGEN_ENCODEC.md](docs/MUSICGEN_ENCODEC.md) for the parity numbers and what each
+stage does.
 
 ## Configuration
 
@@ -121,13 +126,14 @@ the C++ tools write the same tensors as raw f32 in ggml memory order, and
 `tools/cossim.py` compares them at a 0.9999 gate, and reports rms-envelope and
 log-magnitude-spectrum cosines alongside it for audio, which is the fair measure for
 precision tiers. [docs/T5.md](docs/T5.md), [docs/MELODYFLOW_VAE.md](docs/MELODYFLOW_VAE.md),
-[docs/MELODYFLOW_DIT.md](docs/MELODYFLOW_DIT.md), [docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md)
-and [docs/MUSICGEN_LM.md](docs/MUSICGEN_LM.md) are the worked examples, and between them
-record five ggml and checkpoint findings worth knowing before porting any audio model:
-`ggml_conv_1d` rounds activations to F16, `ggml_gelu` is the tanh approximation, a stored
-rotary table may not equal its closed form, an "optional" attention sink may be what keeps a
-null branch finite, and a graph executed more than once must have every input re-uploaded
-before every execution.
+[docs/MELODYFLOW_DIT.md](docs/MELODYFLOW_DIT.md), [docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md),
+[docs/MUSICGEN_LM.md](docs/MUSICGEN_LM.md) and
+[docs/MUSICGEN_ENCODEC.md](docs/MUSICGEN_ENCODEC.md) are the worked examples, and between
+them record six findings worth knowing before porting any audio model: `ggml_conv_1d` rounds
+activations to F16, `ggml_gelu` is the tanh approximation, a stored rotary table may not
+equal its closed form, an "optional" attention sink may be what keeps a null branch finite, a
+graph executed more than once must have every input re-uploaded before every execution, and
+the resampler in front of the model can cost more accuracy than the model does.
 
 ## Credits
 
@@ -135,9 +141,11 @@ before every execution.
 reference implementation of both models.
 [sa3.cpp](https://github.com/betweentwomidnights/sa3.cpp) is where the porting method,
 the ggml fork, and most of the shared code come from.
-[PABannier/encodec.cpp](https://github.com/PABannier/encodec.cpp) is the reference for the
-EnCodec graph, and [ayutaz/vokra](https://github.com/ayutaz/vokra) (Apache-2.0) has
-useful EnCodec and delay-pattern parity fixtures.
+[PABannier/encodec.cpp](https://github.com/PABannier/encodec.cpp) and
+[ayutaz/vokra](https://github.com/ayutaz/vokra) were surveyed as prior art. Neither is used:
+MusicGen's codec turned out to be HuggingFace's `EncodecModel` rather than Meta's original,
+and `ac/seanet.h` already was that architecture — see
+[docs/MUSICGEN_ENCODEC.md](docs/MUSICGEN_ENCODEC.md).
 
 Model weights are the authors': MusicGen and MelodyFlow checkpoints are CC-BY-NC-4.0,
 t5-base is Apache-2.0. This code is MIT.
