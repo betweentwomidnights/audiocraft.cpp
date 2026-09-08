@@ -63,7 +63,9 @@ description for the two `gary_orchestra` models; for the other twelve an unpromp
 generates unguided, because audiocraft zeroes an empty description's conditioning. That is
 audiocraft's behaviour and `musicgen-server` reproduces it exactly — see
 [MUSICGEN_LM.md](MUSICGEN_LM.md). It is also the fast path: a single stream, no
-cross-attention.
+cross-attention, and audibly a worse one: unguided takes wander. Anything that wants
+guided generation has to send a `description`, exactly as it must against the Python
+service.
 
 ### A continuation can start with a beat of silence
 

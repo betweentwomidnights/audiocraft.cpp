@@ -171,10 +171,16 @@ different take on every run regardless.
 
 ## An empty description is not a short one
 
-gary sends `descriptions=None` unless the caller typed one: `get_model_description` has a
-default for exactly two of the fourteen `thepatch` models, both `gary_orchestra`. So the
-unprompted path is the common path, and it is not the path any of our parity runs took until
-late — every reference comparison used a real prompt.
+gary sends `descriptions=None` whenever the caller typed nothing. The service layer defaults
+the field to `""`, `get_model_description` treats that as falsy, and only the two
+`gary_orchestra` models have a description of their own — so for the other twelve, an
+unprompted request generates **unguided**. None of our parity runs took that path until late:
+every reference comparison used a real prompt.
+
+That is worth knowing at the product level too, because unguided is audibly worse. A listening
+check on vanya put it bluntly: with a description the takes read as the model you expect, and
+without one they wander badly. If gary4juce is sending a prompt on most requests, that is why
+the difference has not been obvious.
 
 `T5Conditioner` treats an absent description as `""`, collects it in `empty_idx`, zeroes its
 attention mask, and multiplies the *projected* embeddings by that mask:
