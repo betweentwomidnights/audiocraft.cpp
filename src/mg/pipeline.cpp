@@ -223,7 +223,16 @@ std::vector<int32_t> mg_generate(const GgufModel& lm, const LmConfig& c,
         build_pattern_sequence(pattern, codes.data(), (int32_t)c.special_token_id);
     const std::vector<uint8_t> mask = pattern_mask(pattern);
 
-    const bool guided = params.cfg_coef != 0.0f;
+    // An empty description makes guidance a no-op, so drop it. audiocraft zeroes an empty
+    // prompt's conditioning (see ac/conditioner.h), which leaves the conditional branch
+    // holding the same all-zero context as the null one; `uncond + (cond - uncond) * coef`
+    // is then just `uncond`, computed twice. gary reaches this on every request that does
+    // not carry a description, which is all of them for twelve of the fourteen `thepatch`
+    // models -- only the two `gary_orchestra` checkpoints have a default.
+    //
+    // Skipping it is what makes us match: guiding toward T5's encoding of "" instead
+    // diverges from torch at the first generated token.
+    const bool guided = mg_use_guidance(params.cfg_coef, cond.empty);
     // Guidance is two streams in one forward. Without it there is one stream, and its
     // cross-attention can be skipped outright: the null source is all zeros and the
     // attention projections have no biases, so those blocks contribute exactly nothing.

@@ -33,6 +33,15 @@ struct GenerateParams {
     uint64_t seed = 1234;
 };
 
+// Whether a run actually guides. An empty description is zeroed by the conditioner, so the
+// conditional branch carries the same all-zero context as the null one and
+// `uncond + (cond - uncond) * coef` reduces to `uncond` -- guidance computed twice for
+// nothing. gary takes this path on every request without a description, which is all of them
+// for twelve of the fourteen `thepatch` models.
+inline bool mg_use_guidance(float cfg_coef, bool description_empty) {
+    return cfg_coef != 0.0f && !description_empty;
+}
+
 struct GenerateReport {
     size_t cache_bytes = 0;             // both guidance streams' history
     // The combined logits of the very first prediction, [card, n_q]. The smallest thing two

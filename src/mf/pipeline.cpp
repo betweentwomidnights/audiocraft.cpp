@@ -107,6 +107,12 @@ DitRunner::DitRunner(const GgufModel& dit, const DitConfig& config, const TextCo
     s.mask_cond.assign(row * frames, 0.0f);
     s.mask_null.assign(row * frames, -INFINITY);
     for (int q = 0; q < frames; ++q) s.mask_null[(size_t)q * row] = 0.0f;
+    // An empty description is masked out rather than attended to -- see ac/conditioner.h.
+    // That collapses the conditional mask onto the null one, which is what makes the
+    // inversion pass's `src_descriptions=[""]` an unconditional prediction. Terry never
+    // sends an empty target prompt (the route fills it from the preset), but `mf-edit
+    // --prompt ""` reaches this and has to agree with torch too.
+    if (cond.empty) s.mask_cond = s.mask_null;
 }
 
 DitRunner::~DitRunner() = default;

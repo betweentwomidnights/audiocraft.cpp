@@ -169,6 +169,39 @@ audio is as good, not whether it is the same.
 None of which affects gary, which samples rather than decoding greedily and so produces a
 different take on every run regardless.
 
+## An empty description is not a short one
+
+gary sends `descriptions=None` unless the caller typed one: `get_model_description` has a
+default for exactly two of the fourteen `thepatch` models, both `gary_orchestra`. So the
+unprompted path is the common path, and it is not the path any of our parity runs took until
+late — every reference comparison used a real prompt.
+
+`T5Conditioner` treats an absent description as `""`, collects it in `empty_idx`, zeroes its
+attention mask, and multiplies the *projected* embeddings by that mask:
+
+```python
+entries   = [xi if xi is not None else "" for xi in x]
+empty_idx = [i for i, xi in enumerate(entries) if xi == ""]
+mask[empty_idx, :] = 0
+embeds = output_proj(t5(...)) * mask.unsqueeze(-1)
+```
+
+So the conditional context is **all zeros** — the same thing the null branch carries — and
+`uncond + (cond - uncond) * coef` collapses to `uncond`. Torch computes guidance and throws
+it away; unprompted MusicGen is unguided MusicGen.
+
+Running T5 over `""` and guiding toward the result instead is a different model. It is also
+the obvious implementation, and it is what we shipped through Phase 5: greedy decoding with
+no description **diverged from torch at the first generated token** (1375/2400), while the
+same run with a description was exact. `mg_use_guidance` in `mg/pipeline.h` is the fix, and
+`tests/conditioner_test.cpp` pins both halves of the rule.
+
+Two things to not get clever about. The emptiness test is exact equality with `""`:
+`normalize_text` is false in both checkpoints, so `" "` is a description the model was
+trained to attend to. And dropping guidance here is not an optimisation with a quality
+cost — it is the arithmetic, and it happens to make the unprompted path **1.8x faster on
+CPU and 1.4x on CUDA**, since one stream with no cross-attention replaces two with it.
+
 ## Guidance batching
 
 Classifier-free guidance needs two predictions per step, one conditioned on the text and one

@@ -58,6 +58,13 @@ The generation routes take `audio_data`, `model_name`, `prompt_duration` (defaul
 and `seed`. `retry_music` takes `session_id` and re-runs that session's **input** — not its
 result, which would compound the continuation.
 
+**`description` is usually absent, and that turns guidance off.** gary only defaults a
+description for the two `gary_orchestra` models; for the other twelve an unprompted request
+generates unguided, because audiocraft zeroes an empty description's conditioning. That is
+audiocraft's behaviour and `musicgen-server` reproduces it exactly — see
+[MUSICGEN_LM.md](MUSICGEN_LM.md). It is also the fast path: a single stream, no
+cross-attention.
+
 ### A continuation can start with a beat of silence
 
 Sometimes the first second after the prompt boundary comes out near-silent at every seed,

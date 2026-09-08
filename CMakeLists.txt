@@ -240,6 +240,11 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     add_test(NAME sampling COMMAND sampling_test)
     set_tests_properties(sampling PROPERTIES LABELS "non-gpu;musicgen")
 
+    add_executable(conditioner_test tests/conditioner_test.cpp)
+    target_link_libraries(conditioner_test PRIVATE ac)
+    add_test(NAME conditioner COMMAND conditioner_test)
+    set_tests_properties(conditioner PROPERTIES LABELS "non-gpu;shared;musicgen")
+
     add_executable(dit_skip_test tests/dit_skip_test.cpp)
     target_link_libraries(dit_skip_test PRIVATE ac)
     add_test(NAME dit_skip COMMAND dit_skip_test)

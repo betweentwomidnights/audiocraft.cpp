@@ -29,7 +29,24 @@ namespace ac {
 struct TextCondition {
     std::vector<float> hidden;
     int tokens = 0;
+
+    // True when the description was the empty string, which is not the same as a short one.
+    // `T5Conditioner.tokenize` collects empty entries in `empty_idx` and zeroes their
+    // attention mask; `forward` then multiplies the *projected* embeddings by that mask. So
+    // what reaches the model is an all-zero context -- identical to the null branch -- and
+    // not T5's encoding of an empty prompt, which is a real vector for the EOS token.
+    //
+    // The test is exact equality with "". `normalize_text` is false in both checkpoints and
+    // `word_dropout` only applies while training, so a prompt of nothing but whitespace is a
+    // genuine description and stays one.
+    bool empty = false;
 };
+
+// `T5Conditioner.tokenize`'s `empty_idx` rule, transcribed. A description is empty when it
+// is None or exactly "" -- and nothing else. Do not be tempted to trim: `normalize_text` is
+// false in both checkpoints, so " " is a description the model was trained to attend to, and
+// treating it as empty would silently drop guidance for it.
+inline bool description_is_empty(const std::string& prompt) { return prompt.empty(); }
 
 // Runs T5-base over one prompt and releases the encoder before returning. `device` may be
 // empty for the default backend.
@@ -84,6 +101,7 @@ inline TextCondition encode_prompt(const std::string& t5_path, const std::string
 
     TextCondition out;
     out.tokens = seq;
+    out.empty = description_is_empty(prompt);
     out.hidden.resize((size_t)c.dim * seq);
     ggml_backend_tensor_get(hidden, out.hidden.data(), 0, out.hidden.size() * sizeof(float));
     return out;
