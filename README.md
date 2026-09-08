@@ -12,12 +12,14 @@ covers the two services still on PyTorch there — **gary** (MusicGen
 Scope is deliberately narrow: only what those two services actually call. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-> **status: phase 5.** Both models run end to end and both match the PyTorch reference.
+> **status: phase 6.** Both models run end to end and both match the PyTorch reference.
 > `mf-edit` reproduces terry's settings at 0.9999179 on 30 s of audio — closer to
 > torch-on-CPU than torch-on-GPU is. `mg-generate` is gary's whole transform, wav in and wav
 > out, and reproduces torch **token for token from a raw 44.1 kHz file**: 6000/6000 codes
 > over a 30 s continuation, with the decoded audio at cossim 1.0000000. It is also faster
-> than torch on both CPU and GPU. What is left is the two HTTP services.
+> than torch on both CPU and GPU. `terry-server` and `gary-server` serve both on the routes
+> gary4juce already speaks, so gary4local's Tauri side only changes an `entryPoint` — leaving
+> model publication and quantized tiers as the last of it.
 
 ## Build
 
@@ -85,7 +87,7 @@ build/bin/Release/mg-generate \
 See [docs/MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md),
 [docs/MUSICGEN_LM.md](docs/MUSICGEN_LM.md) and
 [docs/MUSICGEN_ENCODEC.md](docs/MUSICGEN_ENCODEC.md) for the parity numbers and what each
-stage does.
+stage does, and [docs/SERVICES.md](docs/SERVICES.md) for the routes.
 
 ## Configuration
 
@@ -106,7 +108,9 @@ src/            header-driven, like sa3.cpp
   ac/           shared across both models (T5, tokenizer, transformer, SEANet, LSTM)
   mf/           MelodyFlow: DiT, VAE, flow solver, pipeline
   mg/           MusicGen: LM, delay pattern, KV cache, EnCodec, pipeline
-tools/          CLI entry points, converters, reference dumpers, cossim harness
+  serve/        base64, JSON, sessions -- the plumbing under the two HTTP services
+tools/          CLI entry points, servers, converters, reference dumpers, cossim harness
+vendor/         cpp-httplib and yyjson, for the servers only
 tests/          CTest binaries + python converter tests
 docs/           per-model porting notes, measured parity, ggml pin policy
 ```

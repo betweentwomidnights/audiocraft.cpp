@@ -54,17 +54,50 @@ inline std::vector<float> resample_planar_linear(const std::vector<float>& input
 //
 // Rates are reduced by their GCD first, which is what keeps the filter bank small: 44100 ->
 // 32000 becomes 441 -> 320, so there are 320 filters of 459 taps rather than 32000 of them.
+// The number of samples `resample_planar_sinc` would produce. Cheap, and needed before
+// resampling by callers that only want part of the result.
+inline int resample_planar_sinc_length(int n_samples, int src_rate, int dst_rate,
+                                       double rolloff = 0.99) {
+    if (n_samples <= 0) return 0;
+    if (src_rate == dst_rate) return n_samples;
+    const int divisor = (int)std::gcd(src_rate, dst_rate);
+    const int orig = src_rate / divisor;
+    const int step = dst_rate / divisor;
+    (void)rolloff;
+    const long long windows = (long long)n_samples / orig + 1;
+    const long long target =
+        (long long)std::ceil((double)(float)((double)step * n_samples / orig));
+    return (int)std::min(windows * step, target);
+}
+
+// `out_first` / `out_count` restrict the result to a contiguous range of what a full
+// resample would produce; -1 means all of it. The output is *identical* to slicing the full
+// result, because every output sample depends only on a fixed window of the source -- so a
+// caller keeping six seconds out of a two-minute track can skip 95% of the filtering. That
+// is not a theoretical saving: gary resamples whole tracks to keep a six-second prompt.
 inline std::vector<float> resample_planar_sinc(const std::vector<float>& input,
                                                int n_samples, int n_ch,
                                                int src_rate, int dst_rate, int& out_samples,
+                                               int out_first = 0, int out_count = -1,
                                                int lowpass_filter_width = 6,
                                                double rolloff = 0.99) {
     if (n_samples <= 0 || n_ch <= 0) { out_samples = 0; return {}; }
     if (src_rate <= 0 || dst_rate <= 0)
         throw std::runtime_error("invalid sample rate for resampling");
-    if (src_rate == dst_rate) { out_samples = n_samples; return input; }
     if (lowpass_filter_width <= 0)
         throw std::runtime_error("the low-pass filter width must be positive");
+    if (src_rate == dst_rate) {
+        const int count = out_count < 0 ? n_samples - out_first : out_count;
+        if (out_first < 0 || count < 0 || out_first + count > n_samples)
+            throw std::runtime_error("the requested output range is outside the signal");
+        out_samples = count;
+        if (out_first == 0 && count == n_samples) return input;
+        std::vector<float> out((size_t)count * n_ch);
+        for (int c = 0; c < n_ch; ++c)
+            std::copy_n(input.data() + (size_t)c * n_samples + out_first, count,
+                        out.data() + (size_t)c * count);
+        return out;
+    }
 
     const int divisor = (int)std::gcd(src_rate, dst_rate);
     const int orig = src_rate / divisor;
@@ -104,19 +137,29 @@ inline std::vector<float> resample_planar_sinc(const std::vector<float>& input,
     // to the exact ceiling instead.
     const long long target =
         (long long)std::ceil((double)(float)((double)step * n_samples / orig));
-    out_samples = (int)std::min((long long)windows * step, target);
+    const int total = (int)std::min((long long)windows * step, target);
 
-    std::vector<float> out((size_t)out_samples * n_ch, 0.0f);
+    const int count = out_count < 0 ? total - out_first : out_count;
+    if (out_first < 0 || count < 0 || (long long)out_first + count > total)
+        throw std::runtime_error("the requested output range is outside the resampled signal");
+    out_samples = count;
+
+    // Only the windows that touch the requested range are computed.
+    const int first_window = out_first / step;
+    const int last_window = count > 0 ? (out_first + count - 1) / step : first_window - 1;
+
+    std::vector<float> out((size_t)count * n_ch, 0.0f);
     for (int c = 0; c < n_ch; ++c) {
         const float* in_ch = input.data() + (size_t)c * n_samples;
-        float* out_ch = out.data() + (size_t)c * out_samples;
-        for (int m = 0; m < windows; ++m) {
+        float* out_ch = out.data() + (size_t)c * count;
+        for (int m = first_window; m <= last_window; ++m) {
             const int start = m * orig - width;          // index into the unpadded signal
             const int lo = std::max(0, -start);
             const int hi = std::min(taps, n_samples - start);
             for (int j = 0; j < step; ++j) {
-                const long long at = (long long)m * step + j;
-                if (at >= out_samples) break;
+                const int at = m * step + j - out_first;
+                if (at < 0) continue;
+                if (at >= count) break;
                 const double* row = kernel.data() + (size_t)j * taps;
                 double acc = 0.0;
                 for (int k = lo; k < hi; ++k) acc += (double)in_ch[start + k] * row[k];

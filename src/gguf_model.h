@@ -264,6 +264,11 @@ struct GgufModel {
         if (i < 0) throw gguf_error("missing key: " + std::string(k));
         return gguf_get_val_u32(gguf, i);
     }
+    uint64_t u64(const char* k) const {
+        int i = gguf_find_key(gguf, k);
+        if (i < 0) throw gguf_error("missing key: " + std::string(k));
+        return gguf_get_val_u64(gguf, i);
+    }
     float f32(const char* k) const {
         int i = gguf_find_key(gguf, k);
         if (i < 0) throw gguf_error("missing key: " + std::string(k));
@@ -331,6 +336,19 @@ private:
 
 // Load a GGUF into the given backend (CPU if null). Reads tensor data straight
 // from the file at the offsets gguf reports.
+// Metadata only: no backend, no tensor data, no weights read.
+//
+// A server listing a dozen checkpoints wants their parameter counts, not their weights, and
+// opening them properly would read gigabytes to answer one HTTP request.
+inline GgufModel load_gguf_metadata(const char* path) {
+    GgufModel m;
+    m.owns_backend = false;
+    gguf_init_params gp = { /*no_alloc=*/true, /*ctx=*/&m.ctx };
+    m.gguf = gguf_init_from_file(path, gp);
+    if (!m.gguf) throw gguf_error("failed to open " + std::string(path));
+    return m;
+}
+
 inline GgufModel load_gguf(const char* path, ggml_backend_t backend = nullptr) {
     GgufModel m;
     m.backend = backend ? backend : make_backend();

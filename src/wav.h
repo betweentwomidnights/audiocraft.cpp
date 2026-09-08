@@ -113,76 +113,85 @@ inline std::string wav_planar_bytes(const float* data, int n_samples, int n_ch, 
     return out;
 }
 
-// Read a PCM/float WAV into planar f32 channels (ch0[0..n-1], ch1[0..n-1], ...),
-// the same layout write_wav_planar consumes and same_encode expects ([L, ch], L fastest).
-inline std::vector<float> read_wav_planar(const std::string& path, int& n_samples,
-                                          int& n_ch, int& sample_rate) {
+// Parse a PCM/float WAV already in memory into planar f32 channels
+// (ch0[0..n-1], ch1[0..n-1], ...), the same layout write_wav_planar consumes.
+//
+// Memory rather than a path because both services move audio as base64 in JSON: the bytes
+// arrive over a socket and never touch the filesystem. `read_wav_planar` is this with a
+// file read in front of it.
+//
+// `what` only names the source in error messages.
+inline std::vector<float> parse_wav_planar(const std::string& bytes, int& n_samples,
+                                           int& n_ch, int& sample_rate,
+                                           const std::string& what = "wav") {
     using namespace wav_detail;
 
-    FileHandle fh{fopen(path.c_str(), "rb")};
-    FILE* f = fh.f;
-    if (!f) throw std::runtime_error("cannot open " + path);
+    const uint8_t* base = (const uint8_t*)bytes.data();
+    const size_t size = bytes.size();
+    size_t at = 0;
+    auto need = [&](size_t n) {
+        if (at + n > size) throw std::runtime_error(what + ": truncated WAV");
+    };
 
-    char riff[12];
-    if (fread(riff, 1, 12, f) != 12 || memcmp(riff, "RIFF", 4) || memcmp(riff+8, "WAVE", 4)) {
-        throw std::runtime_error(path + " is not a RIFF/WAVE file");
-    }
+    need(12);
+    if (memcmp(base, "RIFF", 4) || memcmp(base + 8, "WAVE", 4))
+        throw std::runtime_error(what + " is not a RIFF/WAVE file");
+    at = 12;
 
     uint16_t fmt = 0, ch = 0, bits = 0;
     uint32_t rate = 0;
-    std::vector<uint8_t> data;
+    const uint8_t* data = nullptr;
+    size_t data_size = 0;
 
-    char id[4];
-    uint8_t szb[4];
-    while (fread(id, 1, 4, f) == 4 && fread(szb, 1, 4, f) == 4) {
-        uint32_t sz = u32le(szb);
+    while (at + 8 <= size) {
+        const uint8_t* id = base + at;
+        const uint32_t sz = u32le(base + at + 4);
+        at += 8;
+        // A declared size past the end is a truncated file; take what is actually there
+        // rather than reading off the end, which is how a half-uploaded chunk arrives.
+        const size_t avail = std::min((size_t)sz, size - at);
         if (!memcmp(id, "fmt ", 4)) {
-            std::vector<uint8_t> fmt_data(sz);
-            read_exact(f, fmt_data.data(), fmt_data.size(), "fmt chunk");
-            if (sz & 1) fseek(f, 1, SEEK_CUR);
-            if (fmt_data.size() < 16) throw std::runtime_error(path + ": invalid fmt chunk");
-
-            fmt = u16le(fmt_data.data());
-            ch = u16le(fmt_data.data() + 2);
-            rate = u32le(fmt_data.data() + 4);
-            bits = u16le(fmt_data.data() + 14);
-
+            if (avail < 16) throw std::runtime_error(what + ": invalid fmt chunk");
+            fmt = u16le(base + at);
+            ch = u16le(base + at + 2);
+            rate = u32le(base + at + 4);
+            bits = u16le(base + at + 14);
             // WAVE_FORMAT_EXTENSIBLE stores the real codec in the SubFormat GUID.
-            if (fmt == 0xfffe && fmt_data.size() >= 40) {
-                uint16_t sub_format = u16le(fmt_data.data() + 24);
+            if (fmt == 0xfffe && avail >= 40) {
+                const uint16_t sub_format = u16le(base + at + 24);
                 if (sub_format == 1 || sub_format == 3) fmt = sub_format;
             }
         } else if (!memcmp(id, "data", 4)) {
-            data.resize(sz);
-            read_exact(f, data.data(), data.size(), "data chunk");
-            if (sz & 1) fseek(f, 1, SEEK_CUR);
-        } else {
-            fseek(f, sz + (sz & 1), SEEK_CUR);   // skip unknown chunk (chunks are word-aligned)
+            data = base + at;
+            data_size = avail;
         }
+        at += (size_t)sz + (sz & 1);   // chunks are word-aligned
     }
 
-    if ((fmt != 1 && fmt != 3) || ch == 0 || rate == 0 || data.empty()) {
-        throw std::runtime_error(path + ": unsupported or empty WAV (fmt=" + std::to_string(fmt) +
+    if ((fmt != 1 && fmt != 3) || ch == 0 || rate == 0 || !data || data_size == 0) {
+        throw std::runtime_error(what + ": unsupported or empty WAV (fmt=" + std::to_string(fmt) +
                                  " bits=" + std::to_string(bits) + " ch=" + std::to_string(ch) + ")");
     }
     if (!(bits == 16 || bits == 24 || bits == 32 || (fmt == 3 && bits == 64))) {
-        throw std::runtime_error(path + ": unsupported WAV bit depth " + std::to_string(bits));
+        throw std::runtime_error(what + ": unsupported WAV bit depth " + std::to_string(bits));
     }
     if (fmt == 3 && !(bits == 32 || bits == 64)) {
-        throw std::runtime_error(path + ": unsupported float WAV bit depth " + std::to_string(bits));
+        throw std::runtime_error(what + ": unsupported float WAV bit depth " + std::to_string(bits));
     }
 
     const size_t bytes_per_sample = bits / 8;
     const size_t frame_bytes = bytes_per_sample * ch;
-    if (frame_bytes == 0 || data.size() < frame_bytes) {
-        throw std::runtime_error(path + ": WAV data chunk is too small");
+    if (frame_bytes == 0 || data_size < frame_bytes) {
+        throw std::runtime_error(what + ": WAV data chunk is too small");
     }
 
-    n_ch = ch; sample_rate = (int)rate; n_samples = (int)(data.size() / frame_bytes);
+    n_ch = ch;
+    sample_rate = (int)rate;
+    n_samples = (int)(data_size / frame_bytes);
     std::vector<float> planar((size_t)n_samples * n_ch);
     for (int s = 0; s < n_samples; s++) {
         for (int c = 0; c < n_ch; c++) {
-            const uint8_t* p = data.data() + ((size_t)s * n_ch + c) * bytes_per_sample;
+            const uint8_t* p = data + ((size_t)s * n_ch + c) * bytes_per_sample;
             float v = 0.0f;
             if (fmt == 3) {
                 if (bits == 32) {
@@ -204,6 +213,20 @@ inline std::vector<float> read_wav_planar(const std::string& path, int& n_sample
         }
     }
     return planar;
+}
+
+inline std::vector<float> read_wav_planar(const std::string& path, int& n_samples,
+                                          int& n_ch, int& sample_rate) {
+    wav_detail::FileHandle fh{fopen(path.c_str(), "rb")};
+    if (!fh.f) throw std::runtime_error("cannot open " + path);
+    std::string bytes;
+    char buf[1 << 16];
+    for (;;) {
+        const size_t got = fread(buf, 1, sizeof(buf), fh.f);
+        if (!got) break;
+        bytes.append(buf, got);
+    }
+    return parse_wav_planar(bytes, n_samples, n_ch, sample_rate, path);
 }
 
 } // namespace ac

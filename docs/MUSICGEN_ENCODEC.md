@@ -89,12 +89,22 @@ audibly worse besides, because linear interpolation across that ratio aliases.
 the filter bank small — 44100 → 32000 becomes 441 → 320, so 320 filters of 459 taps rather
 than 32000 of them — and the whole resample is one strided convolution.
 
-It then reproduced **75.5%**, which is worse. Two bugs' worth of lesson:
+It also takes an output range. Every output sample depends on a fixed window of the source,
+so producing only the part that survives the crop is *identical* to producing all of it and
+slicing — and gary keeps six seconds of a track that may be minutes long. `conform_audio`
+works out the crop before filtering and asks for just that; encoding a 6 s prompt from a
+123 s file went from 2.5 s to 0.98 s. `tests/codec_test.cpp` checks a window against a slice
+of the full result at several offsets, because the whole saving rests on that being exact.
 
-**Order matters, and gary's is not the obvious one.** `resample_for_model` runs on the track
-as loaded and `safe_musicgen_continuation_v2` mixes to mono *after*. Resampling a mono mix
-is not the same computation as mixing two resampled channels. The reference dumper had it
-backwards.
+It then reproduced **75.5%**, which is worse -- for one reason, though it took two guesses
+to find. The first guess was that the order mattered: gary resamples the stereo track and
+mixes to mono *after*, while the reference dumper did it the other way round. That turned
+out to be a red herring. Resampling and channel mixing are both linear operators, so they
+commute; measured on a two-minute file the two orders differ by **3e-7**, which is float
+rounding. `conform_audio` therefore does whichever is cheaper -- mix down before the filter,
+duplicate up after -- and gets the same answer for half the work.
+
+The actual cause was this:
 
 **torchaudio's output length goes through a float32.** It truncates to
 `ceil(new · length / orig)`, but computes that with `torch.as_tensor(...)`, which builds a
@@ -187,11 +197,6 @@ and channel mixing happen there and are the easiest things to get subtly differe
 
 - **No `gary-server` yet.** Phase 6 owns `:8000`, the job queue and the `session_id` polling,
   plus splicing the continuation back onto the original track the way `continue_music` does.
-- **Whole-file resampling.** `conform_audio` resamples the entire input before cropping,
-  because that is what gary does and matching it means doing the same. For a two-minute track
-  that is a couple of seconds of work to keep six seconds of audio. A windowed resample would
-  fix it but changes the filter's phase relative to the reference, so it needs its own parity
-  check.
 - **Model coverage.** One codec, one LM checkpoint. Every `thepatch/*` finetune points at the
   same `facebook/encodec_32khz`, so the codec should be shared across all of them — but
   "should" is not "did".

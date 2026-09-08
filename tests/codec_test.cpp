@@ -1953,6 +1953,53 @@ int main() {
     }
 
     {
+        // Resampling a window must equal slicing the full result. That is the invariant
+        // `conform_audio` leans on to avoid filtering a whole track to keep six seconds of
+        // it, and it holds because every output sample depends on a fixed window of the
+        // source -- but only if the window arithmetic is right, so it is checked rather
+        // than argued.
+        const int n = R44_N;
+        std::vector<float> x(R44_in, R44_in + n);
+        int full_n = 0;
+        const std::vector<float> full =
+            ac::resample_planar_sinc(x, n, 1, R44_SRC, R44_DST, full_n);
+        check(full_n == ac::resample_planar_sinc_length(n, R44_SRC, R44_DST),
+              "the predicted length matches the produced one", full_n,
+              ac::resample_planar_sinc_length(n, R44_SRC, R44_DST));
+
+        const int ranges[][2] = {{0, 1}, {0, full_n}, {full_n - 1, 1}, {17, 100},
+                                 {full_n / 2, full_n / 3}, {full_n, 0}};
+        for (const auto& r : ranges) {
+            int part_n = 0;
+            const std::vector<float> part =
+                ac::resample_planar_sinc(x, n, 1, R44_SRC, R44_DST, part_n, r[0], r[1]);
+            char what[80];
+            std::snprintf(what, sizeof(what), "window [%d, %d) length", r[0], r[0] + r[1]);
+            check(part_n == r[1], what, part_n, r[1]);
+            for (int i = 0; i < r[1] && i < part_n; ++i) {
+                std::snprintf(what, sizeof(what), "window [%d, %d)", r[0], r[0] + r[1]);
+                check_close(part[(size_t)i], full[(size_t)(r[0] + i)], 0.0f, what, i);
+            }
+        }
+
+        bool threw = false;
+        int ignored = 0;
+        try {
+            ac::resample_planar_sinc(x, n, 1, R44_SRC, R44_DST, ignored, full_n - 1, 2);
+        } catch (const std::exception&) { threw = true; }
+        check(threw, "a window past the end is rejected", threw, 1);
+
+        // The same must hold when no resampling is needed at all, since conform_audio uses
+        // one code path for both.
+        int same_n = 0;
+        const std::vector<float> same =
+            ac::resample_planar_sinc(x, n, 1, R44_SRC, R44_SRC, same_n, 5, 9);
+        check(same_n == 9, "equal rates honour the window", same_n, 9);
+        for (int i = 0; i < 9; ++i)
+            check_close(same[(size_t)i], x[(size_t)(5 + i)], 0.0f, "equal-rate window", i);
+    }
+
+    {
         // The length trap, as data. torchaudio computes its target length through a
         // float32, so for long inputs it lands one sample below the exact ceiling -- and
         // one sample is enough to shift a tail crop onto different audio.

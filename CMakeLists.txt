@@ -152,6 +152,34 @@ if(AC_BUILD_TOOLS)
         add_executable(mg-generate tools/mg-generate.cpp)
         target_link_libraries(mg-generate PRIVATE ac_musicgen)
     endif()
+
+    # --- the two HTTP services -------------------------------------------------------
+    # Vendored cpp-httplib (split implementation) and yyjson (C), warnings off: they are
+    # third-party sources and their noise would drown ours.
+    find_package(Threads REQUIRED)
+    function(ac_add_server target source family)
+        add_executable(${target} ${source}
+            vendor/cpp-httplib/httplib.cpp
+            vendor/yyjson/yyjson.c)
+        target_link_libraries(${target} PRIVATE ${family} Threads::Threads)
+        target_include_directories(${target} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/vendor/cpp-httplib
+            ${CMAKE_CURRENT_SOURCE_DIR}/vendor/yyjson)
+        if(MSVC)
+            set_source_files_properties(vendor/yyjson/yyjson.c vendor/cpp-httplib/httplib.cpp
+                                        PROPERTIES COMPILE_FLAGS /w)
+        else()
+            set_source_files_properties(vendor/yyjson/yyjson.c vendor/cpp-httplib/httplib.cpp
+                                        PROPERTIES COMPILE_FLAGS -w)
+        endif()
+    endfunction()
+
+    if(AC_BUILD_MELODYFLOW)
+        ac_add_server(terry-server tools/terry-server.cpp ac_melodyflow)
+    endif()
+    if(AC_BUILD_MUSICGEN)
+        ac_add_server(gary-server tools/gary-server.cpp ac_musicgen)
+    endif()
 endif()
 
 # --- tests -----------------------------------------------------------------
@@ -196,6 +224,11 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     target_link_libraries(pattern_test PRIVATE ac)
     add_test(NAME pattern COMMAND pattern_test)
     set_tests_properties(pattern PROPERTIES LABELS "non-gpu;musicgen")
+
+    add_executable(serve_test tests/serve_test.cpp)
+    target_link_libraries(serve_test PRIVATE ac)
+    add_test(NAME serve COMMAND serve_test)
+    set_tests_properties(serve PROPERTIES LABELS "non-gpu;shared")
 
     add_executable(codec_test tests/codec_test.cpp)
     target_link_libraries(codec_test PRIVATE ac)
