@@ -245,11 +245,14 @@ int main(int argc, char** argv) {
             const std::vector<float> latent =
                 ac::rvq_decode(books, codes, params.max_gen_len);
             int64_t out_samples = 0;
-            const std::vector<float> audio =
+            std::vector<float> audio =
                 ac::codec_decode(codec, cc, latent, params.max_gen_len, out_samples);
             fprintf(stderr, "[ac] decode: %.3fs -> %lld samples (%.2fs)\n",
                     now_s() - t0, (long long)out_samples,
                     (double)out_samples / cc.sample_rate);
+            const float peak = ac::peak_normalize_if_clipping(audio);
+            if (peak > 1.0f)
+                fprintf(stderr, "[ac] peak %.3f, scaled to 1.0 for 16-bit\n", peak);
             ac::write_wav_planar(out_path, audio.data(), (int)out_samples, cc.channels,
                                  cc.sample_rate);
             fprintf(stderr, "[ac] wrote %s\n", out_path.c_str());

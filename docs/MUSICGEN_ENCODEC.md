@@ -205,6 +205,34 @@ and channel mixing happen there and are the easiest things to get subtly differe
   which was the right call for MelodyFlow's sixteen stacked convolutions and has not been
   revisited for this one.
 
+## The decoder overshoots, and clamping it is audible
+
+EnCodec's decoder output is not bounded to [-1, 1] and MusicGen leaves it well outside:
+a 30 s continuation from `thepatch/vanya_ai_dnb_0.1` typically peaks around **2.0**, with
+roughly one percent of samples past full scale. Converting that straight to 16-bit clamps
+every one of them flat.
+
+That does not sound like distortion. It sounds like a brick-wall limiter: transients lose
+their peaks, the crest factor collapses, and the result reads as grungy and undynamic rather
+than obviously broken. Measured on one clip, generated region only:
+
+| | at the rails | crest factor |
+|---|---|---|
+| gary (the Python service) | 0.0001% | 5.72 |
+| ours, clamping | 0.9340% | 2.51 |
+| ours, scaled | 0.0001% | 5.14 |
+
+gary avoids it in `save_audio_to_base64`, and `ac::peak_normalize_if_clipping` is the same
+rule: divide by the peak, but only when the peak exceeds 1. Quiet output is never lifted, so
+two takes keep their relative loudness — this is headroom, not normalization.
+
+It applies to MusicGen's write path only. Terry hands `torchaudio.save` the tensor as-is, so
+MelodyFlow keeps clamping and keeps matching terry.
+
+**No parity check could have caught this.** It lives downstream of the tokens, in the float
+to 16-bit conversion, and every code-level comparison in this repo stops at the codes. The
+symptom was audible immediately and invisible to all of them.
+
 ## Deferred
 
 - **`normalize` and chunking.** `facebook/encodec_32khz` sets `normalize: false` and

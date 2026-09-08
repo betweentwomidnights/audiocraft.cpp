@@ -218,7 +218,11 @@ std::string run_generation(const GenerateRequest& req, const std::string& sessio
     const ac::RvqCodebooks books = ac::rvq_load(codec, c.rvq_n_q, c.rvq_bins, c.latent_dim);
     const std::vector<float> latent = ac::rvq_decode(books, codes, timesteps);
     int64_t out_samples = 0;
-    const std::vector<float> audio = ac::codec_decode(codec, c, latent, timesteps, out_samples);
+    std::vector<float> audio = ac::codec_decode(codec, c, latent, timesteps, out_samples);
+    // Headroom, not loudness -- see ac::peak_normalize_if_clipping. gary does this in
+    // `save_audio_to_base64`, and without it the 16-bit conversion flattens every transient
+    // the decoder overshot on.
+    ac::peak_normalize_if_clipping(audio);
     return encode_audio(audio, (int)out_samples, channels, sample_rate);
 }
 

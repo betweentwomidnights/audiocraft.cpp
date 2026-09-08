@@ -538,4 +538,31 @@ inline void splice_continuation_source(std::vector<float>& audio, int audio_n, i
     meta.gain               = gain;
 }
 
+// Divide by the peak when the audio has left [-1, 1], and leave it alone when it has not.
+//
+// EnCodec's decoder is not bounded and MusicGen overshoots routinely -- a 30 s continuation
+// commonly peaks around 2.5, and the loudest one percent of it is well outside the range a
+// 16-bit sample can hold. Writing that directly clamps every overshoot flat, which does not
+// sound like distortion so much as a limiter: transients lose their peaks, the crest factor
+// collapses, and the result reads as grungy and undynamic rather than obviously broken.
+//
+// gary's `save_audio_to_base64` divides by the peak instead, and that is what this is:
+//
+//     max_val = torch.abs(waveform).max()
+//     if max_val > 1.0:
+//         waveform = waveform / max_val
+//
+// Only when it exceeds 1, so quiet output is never lifted -- this is headroom management,
+// not normalization, and two takes keep their relative loudness. Note terry does *not* do
+// this (it hands `torchaudio.save` the tensor as-is), so this belongs on MusicGen's path
+// only; see docs/MUSICGEN_ENCODEC.md.
+inline float peak_normalize_if_clipping(std::vector<float>& audio) {
+    float peak = 0.0f;
+    for (float v : audio) peak = std::max(peak, std::fabs(v));
+    if (!(peak > 1.0f)) return peak;
+    const float inv = 1.0f / peak;
+    for (float& v : audio) v *= inv;
+    return peak;
+}
+
 } // namespace ac
