@@ -267,34 +267,40 @@ second token, on the same binary, the same weights and the same prompt.
 ## Speed
 
 30 s of audio: 1202 decode steps, 1203 forwards. RTX 5070 Laptop 8 GB, Core Ultra 9 275HX.
+Every row below was measured in **one sitting on an otherwise quiet machine**, torch included,
+because that turned out to matter (see the note under the table).
 
 | | decode | steps/s | vs torch |
 |---|---|---|---|
-| torch CUDA, fp16 + xformers (what gary runs) | 32.7 s | 37 | 1.0x |
-| audiocraft.cpp CUDA F32 | 16.1 s | 74.8 | **2.03x** |
-| audiocraft.cpp CUDA F16 | **13.5 s** | **89.3** | **2.43x** |
-| audiocraft.cpp CPU F32 | 63.3 s | 19.0 | 0.5x |
+| torch CUDA, fp16 + xformers, with a description | 27.5 s | 44 | 1.0x |
+| torch CUDA, fp16 + xformers, unprompted | 27.4 s | 44 | 1.0x |
+| audiocraft.cpp CUDA F32, with a description | 18.7 s | 64.3 | 1.47x |
+| audiocraft.cpp CUDA F16, with a description | **16.4 s** | **73.3** | **1.68x** |
+| audiocraft.cpp CUDA F32, unprompted | 9.9 s | 121.6 | 2.78x |
+| audiocraft.cpp CUDA F16, unprompted | **8.0 s** | **151.0** | **3.45x** |
+| audiocraft.cpp CPU F32, with a description | 64.5 s | 18.6 | 0.43x |
+| audiocraft.cpp CPU F32, unprompted | 36.9 s | 32.5 | 0.74x |
 
-Before batching, at 2406 forwards over two caches: CUDA F32 23.8 s, CUDA F16 19.3 s, CPU F32
-82 s.
+**torch takes the same time either way.** An empty description makes guidance a no-op, but
+audiocraft still builds the batch of two and computes it (see above), so an unprompted
+request costs it a full guided forward for nothing. Skipping that is most of the gap in the
+last two CUDA rows, and it is gary's default for twelve of the fourteen `thepatch` models.
 
-**Read the absolute numbers with care.** They come from a laptop GPU, and a later sitting on
-the same machine — with a DAW, a webcam utility and a few browsers holding graphics
-contexts, and the card idling at 65 C — reproduced every ratio here while coming in about
-25% slower across the board. Ratios measured back to back in one sitting are the trustworthy
-part; anything compared against torch's 32.7 s, which was timed on a different day, is worth
-re-running in one clean sitting before quoting.
+**We are faster than torch here** — unlike MelodyFlow, where we are 2x behind. The difference
+is what each side is good at: MelodyFlow is 750-token full-sequence forwards where xformers'
+fused attention dominates, while MusicGen is single-token steps where per-call overhead
+dominates and ggml's is lower. torch's number includes the codec decode (well under a second
+of it); ours excludes model loading, which is another 1-3 s.
 
-**We are already faster than torch here** — unlike MelodyFlow, where we are 2x behind. The
-difference is what each side is good at: MelodyFlow is 750-token full-sequence forwards where
-xformers' fused attention dominates, while MusicGen is single-token steps where per-call
-overhead dominates and ggml's is lower. torch's number includes the codec decode (well under
-a second of it); ours excludes model loading, which is another 1-3 s.
+An earlier revision of this table claimed 2.43x by comparing our 13.5 s against a 32.7 s torch
+figure timed on a different day. Both numbers were real; the ratio was not. On a laptop, with
+a DAW and a webcam utility holding graphics contexts and the card idling 17 C warmer, the same
+binaries came in about 25% slower across the board while every ratio held. **Time both sides
+in one sitting or do not quote the multiple.**
 
 The remaining wins are an **F16 KV cache** — 591 MB is most of what an 8 GB card has to
 spare, and halving it also halves the bandwidth attention reads every step — and quantized
 weights, which nothing has tried yet.
-
 
 ## Reproducing
 
