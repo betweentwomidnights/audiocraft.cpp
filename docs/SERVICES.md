@@ -152,6 +152,13 @@ default to and therefore what the plugin already handles.
 - **Not yet wired into gary4local.** `service_manager.rs` still points at the Python
   entrypoints. Switching it over is a one-line change per service plus dropping the venv
   build, but it has not been done or tested from the Tauri side.
+
+  The *protocol* half of that gate is closed, though, and by accident: a `melodyflow-server`
+  left running on :8002 from an earlier session was picked up by gary4juce in place of the
+  Python service, and the plugin drove a transform through it without noticing the
+  difference. Unplanned, but it is the test that matters — the real client, the real
+  routes, no client-side changes. What is still untested is the Tauri side launching and
+  supervising the binary, not whether the plugin can talk to it.
 - **Model publication.** Only `thepatch/vanya_ai_dnb_0.1` has been converted. The other
   thirteen `thepatch/*` finetunes need converting and publishing as GGUF before
   `/api/models` can offer what the Python service does. The converter is driven entirely by
