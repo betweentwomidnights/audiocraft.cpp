@@ -205,8 +205,9 @@ same run with a description was exact. `mg_use_guidance` in `mg/pipeline.h` is t
 Two things to not get clever about. The emptiness test is exact equality with `""`:
 `normalize_text` is false in both checkpoints, so `" "` is a description the model was
 trained to attend to. And dropping guidance here is not an optimisation with a quality
-cost — it is the arithmetic, and it happens to make the unprompted path **1.8x faster on
-CPU and 1.4x on CUDA**, since one stream with no cross-attention replaces two with it.
+cost — it is the arithmetic, and it happens to make the unprompted path considerably
+faster, since one stream with no cross-attention replaces two with it. Measured back to back
+on one card: **1.7x at F32, 2.0x at F16**, and 1.8x on CPU.
 
 ## Guidance batching
 
@@ -276,6 +277,13 @@ second token, on the same binary, the same weights and the same prompt.
 
 Before batching, at 2406 forwards over two caches: CUDA F32 23.8 s, CUDA F16 19.3 s, CPU F32
 82 s.
+
+**Read the absolute numbers with care.** They come from a laptop GPU, and a later sitting on
+the same machine — with a DAW, a webcam utility and a few browsers holding graphics
+contexts, and the card idling at 65 C — reproduced every ratio here while coming in about
+25% slower across the board. Ratios measured back to back in one sitting are the trustworthy
+part; anything compared against torch's 32.7 s, which was timed on a different day, is worth
+re-running in one clean sitting before quoting.
 
 **We are already faster than torch here** — unlike MelodyFlow, where we are 2x behind. The
 difference is what each side is good at: MelodyFlow is 750-token full-sequence forwards where
