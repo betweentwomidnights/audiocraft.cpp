@@ -215,6 +215,11 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     add_test(NAME graph_reuse COMMAND graph_reuse_test)
     set_tests_properties(graph_reuse PROPERTIES LABELS "non-gpu;shared")
 
+    add_executable(kv_attention_test tests/kv_attention_test.cpp)
+    target_link_libraries(kv_attention_test PRIVATE ac)
+    add_test(NAME kv_attention COMMAND kv_attention_test)
+    set_tests_properties(kv_attention PROPERTIES LABELS "musicgen")
+
     add_executable(solver_test tests/solver_test.cpp)
     target_link_libraries(solver_test PRIVATE ac)
     add_test(NAME solver COMMAND solver_test)

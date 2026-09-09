@@ -231,6 +231,38 @@ Greedy decoding makes this checkable exactly. The change touches attention layou
 layer, and the tokens have to stay identical or it is wrong: CPU F32 and CUDA F32 both still
 produce **6000/6000** against the torch reference.
 
+## The CUDA bug that greedy parity could not see
+
+For a while the unguided path on CUDA produced audio with no rhythm in it: token entropy 8.38
+against the CPU's 7.2, and — the giveaway — the *same* to within 0.04 across every seed,
+where torch varies by half a bit. A continuation of a drum loop came back with no beat at all.
+
+The cause was in the CUDA backend, not here. `ggml_cuda_cpy` picks a tiled transpose kernel
+when `can_be_transposed`, and that kernel writes `dst[imat*n + row*ne00 + col]` — contiguous,
+ignoring `nb10..nb13`. The condition only inspected the *source*, so a transposing copy into
+a strided view was dispatched to it and landed in the wrong addresses. Our V cache write is
+exactly that copy, and the cache was being corrupted on every decode step.
+
+Three coincidences kept it hidden, and each one is worth remembering:
+
+- **`src0->ne[3] == 1` is part of the condition**, so it fired only with a guidance batch of
+  one. Every parity run we had used a text prompt, which means `n_seq = 2`, which was exact.
+- **A single token makes `nb01 == element_size`**, so the prefill (301 tokens at once) took
+  the correct path and only the decode steps were wrong. First-step logits matched torch to
+  7e-05 while the rest of the generation was garbage.
+- **Greedy decoding never exercises the sampler**, and sampled decoding never gets a
+  reference to compare against. The failure lived in the gap between the two.
+
+`tests/kv_attention_test.cpp` pins it: one decode step's attention, run on every hostable
+backend, required to agree with the CPU. It is the shape the whole autoregressive loop runs
+in — a one-column query against a strided history — and it is not a shape any
+full-sequence forward reaches. The fix is a one-line addition of `ggml_is_contiguous(src1)`
+in the ggml fork.
+
+The lesson for the parity methodology: **token-exact agreement on one configuration says
+nothing about the others.** Guided was exact end to end while unguided was broken from the
+second token, on the same binary, the same weights and the same prompt.
+
 ## Speed
 
 30 s of audio: 1202 decode steps, 1203 forwards. RTX 5070 Laptop 8 GB, Core Ultra 9 275HX.
