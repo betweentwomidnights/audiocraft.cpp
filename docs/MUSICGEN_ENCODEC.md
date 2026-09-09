@@ -151,15 +151,17 @@ device-independent enough that its own checkpoints match on either.
 
 | | encode | LM decode | synthesize | wall |
 |---|---|---|---|---|
-| torch CPU | — | — | — | 127.3 s |
-| audiocraft.cpp CPU F32 | 0.66 s | 94.8 s (12.7 steps/s) | 3.5 s | **101.4 s** |
-| audiocraft.cpp CUDA F32 | 0.20 s | 24.0 s (50.0 steps/s) | 0.42 s | 27.7 s |
-| audiocraft.cpp CUDA F16 | 0.22 s | 19.8 s (60.7 steps/s) | 0.44 s | **23.2 s** |
+| torch CPU | — | — | — | 122.2 s |
+| torch CUDA fp16 | — | — | — | 35.2 s |
+| audiocraft.cpp CPU F32 | 0.60 s | 61.5 s (19.5 steps/s) | 3.43 s | **69.6 s** |
+| audiocraft.cpp CUDA F32 | 0.20 s | 19.5 s (61.7 steps/s) | 0.40 s | 21.2 s |
+| audiocraft.cpp CUDA F16 | 0.21 s | 17.2 s (69.7 steps/s) | 0.43 s | **19.0 s** |
 
-torch's figure is the LM loop plus the codec decode with the model already resident; ours are
-whole-process, including loading three models. torch on CUDA does the same work in 32.7 s
-(see [MUSICGEN_LM.md](MUSICGEN_LM.md)), so **the C++ is ahead on both devices**, and the LM
-loop still runs its two guidance streams sequentially where audiocraft batches them.
+All rows timed in one sitting on a quiet machine, ours *and* torch — see the note in
+[MUSICGEN_LM.md](MUSICGEN_LM.md) about what happens when they are not. These are
+whole-process wall times on both sides: torch's includes loading its model, ours includes
+loading three. Guidance is on for every row (a description was passed); gary's unprompted
+default is roughly twice as fast again on the LM, per that same doc.
 
 Codec time is not the interesting number here — it is under 2% of the total on GPU — but note
 the CPU decode is 3.5 s against 0.42 s on CUDA, which is the F32 im2col from
