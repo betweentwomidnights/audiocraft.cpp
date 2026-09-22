@@ -9,9 +9,11 @@ __pycache__/
 
 # model artifacts and parity data. The convention throughout is ref*/ for a torch dump and
 # cpp*/ for ours, compared with tools/cossim.py -- both are scratch.
+# Anchored: unanchored, cpp*/ also matched vendor/cpp-httplib/, so the vendored
+# httplib was never committed and a fresh clone could not configure.
 models/
-ref*/
-cpp*/
+/ref*/
+/cpp*/
 *.gguf
 *.wav
 *.f32
