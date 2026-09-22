@@ -37,10 +37,16 @@ printf 'ggml            %s\n' "$(git -C ggml rev-parse HEAD 2>/dev/null || echo 
 
 # The tests live behind AC_BUILD_TOOLS as well as BUILD_TESTING, since an
 # embedding application can link a family without building any CLI.
+# GGML_METAL has to be turned off rather than merely left alone. ggml defaults
+# it ON for Apple, and AC_METAL=OFF only declines to force it ON, so a macOS
+# runner was building and running Metal while this script claimed to be CPU
+# only. On a virtualised runner that aborted lstm, graph_reuse and kv_attention.
+# A GPU backend is worth testing on a machine that has one, not here.
 cmake -S . -B "$build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DAC_BUILD_TOOLS=ON \
-    -DBUILD_TESTING=ON
+    -DBUILD_TESTING=ON \
+    -DGGML_METAL=OFF
 cmake --build "$build" --config Release -j "$jobs"
 
 # --output-on-failure so a red test explains itself in the job log rather than
