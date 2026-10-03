@@ -56,8 +56,12 @@ inline ggml_tensor* lstm_graph(ggml_context* ctx, const GgufModel& W,
         ggml_tensor* w_hh = W.get(p + "w_hh");
         ggml_tensor* bias = W.get(p + "bias");     // [4*hidden]
 
-        // The non-recurrent half, for every timestep at once.
-        ggml_tensor* projected = ggml_add(ctx, ggml_mul_mat(ctx, w_ih, input), bias);
+        // The non-recurrent half, for every timestep at once. This is a full GEMM, so a GPU
+        // backend may run it at reduced precision unless asked not to; at F16 accumulation it
+        // flips EnCodec's RVQ codes on Vulkan. The per-step W_hh matvec below is exact anyway.
+        ggml_tensor* ih = ggml_mul_mat(ctx, w_ih, input);
+        ggml_mul_mat_set_prec(ih, GGML_PREC_F32);
+        ggml_tensor* projected = ggml_add(ctx, ih, bias);
 
         // Zero initial hidden and cell state, as nn.LSTM uses when none is supplied.
         ggml_tensor* state_h = ggml_scale(
