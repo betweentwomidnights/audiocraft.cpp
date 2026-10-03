@@ -213,6 +213,7 @@ inline ggml_tensor* seanet_conv_transpose1d(ggml_context* ctx, const GgufModel& 
 
     ggml_tensor* xt = ggml_cont(ctx, ggml_transpose(ctx, x));       // [in, T]
     ggml_tensor* columns = ggml_mul_mat(ctx, w, xt);                // [kernel*out, T]
+    ggml_mul_mat_set_prec(columns, GGML_PREC_F32);   // as in nn::conv_1d_f32
     ggml_tensor* y = ggml_col2im_1d(ctx, columns, stride, out_channels, g.pad_right);
 
     if (y->ne[0] != g.col2im_frames)
