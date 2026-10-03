@@ -4,22 +4,31 @@
 [`betweentwomidnights/ggml`](https://github.com/betweentwomidnights/ggml), the fork shared
 with `sa3.cpp` and `acestep.cpp`.
 
-Current pin: `07f9348a`, the shared Vulkan candidate
-([betweentwomidnights/ggml#10](https://github.com/betweentwomidnights/ggml/pull/10)) that every
-consumer of the fork pins. It sits on `fff93d27`, the previous tip of
-`feature/shared-sa3-acestep-v0.17`. That tip is `19c5421c` (upstream ggml `v0.17.0` plus the
-fork's patch stack) with the two CUDA commits from betweentwomidnights/ggml#6 on top: the TF32
-opt-out below, and a contiguity check for the transposed copy (see
-[MUSICGEN_LM.md](MUSICGEN_LM.md)). #10 merges three Vulkan fixes and adds tests:
+Current pin: `f30f0cdc`
+([betweentwomidnights/ggml#11](https://github.com/betweentwomidnights/ggml/pull/11)), which
+every consumer of the fork pins. It is `07f9348a`, the shared Vulkan candidate
+([#10](https://github.com/betweentwomidnights/ggml/pull/10)), plus its Metal counterpart. Both
+sit on `fff93d27`, the earlier tip of `feature/shared-sa3-acestep-v0.17`. That tip is
+`19c5421c` (upstream ggml `v0.17.0` plus the fork's patch stack), with the two CUDA commits from
+betweentwomidnights/ggml#6 on top: the TF32 opt-out below, and a contiguity check for the
+transposed copy (see [MUSICGEN_LM.md](MUSICGEN_LM.md)).
 
-- #7, `GGML_PREC_F32` keeps an F32 x F32 matmul's operands in fp32. Without it, Vulkan rounds
+#10 merges three Vulkan fixes and adds tests:
+
+- #7: `GGML_PREC_F32` keeps an F32 x F32 matmul's operands in fp32. Without it, Vulkan rounds
   them to fp16.
-- #8, the batch stride of an in-place matmul src comes from `nb[2]`. This is the KV-cache bug
-  `tests/kv_attention_test.cpp` pins.
-- #9, a Vulkan `PAD_REFLECT_1D` kernel. Without it, SEANet produced noise on Vulkan.
+- #8: the batch stride of an in-place matmul src comes from `nb[2]`. This is the KV-cache bug
+  that `tests/kv_attention_test.cpp` pins.
+- #9: a Vulkan `PAD_REFLECT_1D` kernel. Without it, SEANet produced noise on Vulkan.
 
-On Vulkan, that brings the MelodyFlow VAE and EnCodec to cossim 1.0000000 against torch, and
-greedy MusicGen to 100% of tokens.
+#11 does the same for Metal:
+
+- `GGML_PREC_F32` on an F32 x F32 `mul_mm` stages its operands as `float` instead of `half`.
+- A partial-simdgroup fix for NORM/RMS_NORM, cherry-picked from upstream.
+
+On Vulkan, these bring the MelodyFlow VAE and EnCodec to cossim 1.0000000 against torch, and
+greedy MusicGen to 100% of tokens. On an Apple M4, measured against the same machine's CPU, the
+VAE latent goes from 77.3 to 118.1 dB, and EnCodec codes go from 1999/2000 to 2000/2000.
 
 The rest of the fork's patch stack — CPU/CUDA/Vulkan/Metal autodiff and backend work, the Q4_K_M
 `get_rows` fix, the wide-row `SET` fix, quantized-`src0` `OUT_PROD` — is documented in
@@ -191,13 +200,16 @@ git submodule update --init --recursive
   +-- 217f0f2d   vulkan : honor GGML_PREC_F32 for f32 x f32 mul_mat (#7)
   +-- d6e6604f   vulkan : read the batch stride of an in place mul_mat src from nb[2] (#8)
   +-- 5cb55640   tests : SEANet-shaped PAD_REFLECT_1D cases (#9, on d12e8055)
-  +-- 07f9348a   tests : MUL_MAT cases with GGML_PREC_F32
-                 (shared Vulkan candidate, #10)   <- audiocraft.cpp pins this
+  +-- 07f9348a   tests : MUL_MAT cases with GGML_PREC_F32 (shared Vulkan candidate, #10)
+  +-- 3163749a   metal : fix NORM/RMS_NORM for row lengths that leave a partial simdgroup
+  +-- c4146532   metal : honor GGML_PREC_F32 for f32 x f32 mul_mm
+  +-- f30f0cdc   tests : keep the default MUL_MAT prec=f32 bound on CUDA while TF32 is on
+                 (#11)   <- audiocraft.cpp pins this
 ```
 
 Read the pin from a checkout rather than trusting this file:
 
 ```bash
-git -C ggml rev-parse HEAD          # 07f9348a...
+git -C ggml rev-parse HEAD          # f30f0cdc...
 git -C ggml log --oneline 19c5421c..HEAD
 ```
