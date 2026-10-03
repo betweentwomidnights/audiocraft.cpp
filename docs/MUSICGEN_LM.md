@@ -264,6 +264,37 @@ The lesson for the parity methodology: **token-exact agreement on one configurat
 nothing about the others.** Guided was exact end to end while unguided was broken from the
 second token, on the same binary, the same weights and the same prompt.
 
+### The same test, on Vulkan
+
+`kv_attention` then failed on Vulkan, on both an Intel iGPU and the RTX 5070, for both
+`n_seq` values (max |diff| 0.39 and 0.80). Running each op of the decode step on its own
+against the CPU put it in exactly one place: `mul_mat(k_history, q)`, the first attention
+matmul (max |diff| 53). The cache writes, the softmax and the V matmul were all exact.
+
+`k_history` is `[head_dim, used + 1, n_head, n_seq]` out of a `[head_dim, capacity, ...]`
+buffer, so its rows are packed but its heads are `capacity` rows apart.
+`ggml_vk_dim01_contiguous` checks `nb[0]`, `nb[1]` and `nb[3]` only, so the backend read the
+view in place and passed `ne00 * ne01` as the batch stride: every head past the first read
+the wrong rows. The V history is not row-contiguous, so it took the copy-to-contiguous path
+and was right all along. Upstream fixed this on 2026-09-28
+([ggml-org/llama.cpp#28956](https://github.com/ggml-org/llama.cpp/pull/28956)); the fork
+carries a backport of it, with its `test-backend-ops` cases.
+
+It was not a test artifact. Before the fix, greedy generation on Vulkan matched torch on
+0.02% of tokens, with a token entropy of 8.81 bits against torch's 2.00. After it:
+
+| | tokens matching |
+|---|---|
+| RTX 5070 Vulkan, guided, vs torch (`refmge2e`, `refmg30`) | **100%** |
+| Intel iGPU Vulkan, guided, vs torch (`refmge2e`) | **100%** |
+| RTX 5070 and Intel iGPU Vulkan, unguided, vs our CPU | **100%** |
+
+Decode on the RTX went from 24.8 to 48.8 steps/s. The first-step logits on Vulkan sit at
+cossim 0.99992 (RTX) and 0.99997 (iGPU) against torch, where CPU is 1.0000000. That gap is
+the same before and after the fix, so it is not this bug. The likely cause is Vulkan running
+F32 x F32 matmuls at reduced precision, which betweentwomidnights/ggml#7 addresses; that has
+not been measured here.
+
 ## Speed
 
 30 s of audio: 1202 decode steps, 1203 forwards. RTX 5070 Laptop 8 GB, Core Ultra 9 275HX.

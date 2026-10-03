@@ -4,14 +4,15 @@
 [`betweentwomidnights/ggml`](https://github.com/betweentwomidnights/ggml), the fork shared
 with `sa3.cpp` and `acestep.cpp`.
 
-Current pin: `1b05d2b0` on `feature/audiocraft-cuda-tf32-v0.17.0`, one commit past
-`19c5421c` — the commit `sa3.cpp` pins — which is upstream ggml `v0.17.0` plus the fork's
-existing patch stack.
+Current pin: `d6e6604f` on `vulkan-mul-mat-strided-batch`
+([betweentwomidnights/ggml#8](https://github.com/betweentwomidnights/ggml/pull/8)), one
+commit past `fff93d27`, the tip of `feature/shared-sa3-acestep-v0.17`. That tip is
+`19c5421c` (upstream ggml `v0.17.0` plus the fork's patch stack) with the two CUDA commits
+from betweentwomidnights/ggml#6 on top: the TF32 opt-out below, and a contiguity check for
+the transposed copy (see [MUSICGEN_LM.md](MUSICGEN_LM.md)).
 
-> **This branch is local and unpushed.** A fresh `git clone --recurse-submodules` of this
-> repo cannot resolve the gitlink until the branch is pushed to the fork. That is deliberate
-> for now: the one commit on it changes CUDA numerics, and the plan is to build and retest
-> `sa3.cpp` and `acestep.cpp` against it before anything is published.
+> **#8 is not merged yet.** The pin moves back onto `feature/shared-sa3-acestep-v0.17` once
+> it lands and the other consumers have run their Vulkan suites against it.
 
 The rest of the fork's patch stack — CPU/CUDA/Vulkan/Metal autodiff and backend work, the Q4_K_M
 `get_rows` fix, the wide-row `SET` fix, quantized-`src0` `OUT_PROD` — is documented in
@@ -30,7 +31,7 @@ upstream bump could disturb:
 | `ggml_rope_ext` (NeoX) | MelodyFlow DiT positional embedding |
 | `ggml_flash_attn_ext` | optional attention path (`AC_FLASH_ATTN`) |
 
-## Our one commit: opting out of TF32 for F32 matmuls on CUDA
+## CUDA: opting out of TF32 for F32 matmuls
 
 `ggml_backend_cuda_context::cublas_handle` creates its cuBLAS handle with
 
@@ -131,6 +132,20 @@ takes it:
    decoders, so `sa3.cpp`'s Oobleck is a plausible beneficiary.
 4. Then push the branch and record the pin here.
 
+## Vulkan: strided batches in mul_mat
+
+Backport of upstream
+[ggml-org/llama.cpp#28956](https://github.com/ggml-org/llama.cpp/pull/28956). The Vulkan
+backend read a row-contiguous view with strided batches in place, but passed a packed batch
+stride (`ne00*ne01`). The KV cache's K history is exactly that view, so on Vulkan every
+attention head past the first read the wrong keys. `kv_attention` failed on Vulkan, and
+greedy MusicGen matched torch on 0.02% of tokens. With the fix it matches on 100%. The
+details are in [MUSICGEN_LM.md](MUSICGEN_LM.md); the fork-side numbers and
+`test-backend-ops` cases are in betweentwomidnights/ggml#8.
+
+It changes no result that was right before: a contiguous tensor gets the same stride as
+before, and only views like this one move.
+
 ## Pin policy
 
 Same policy as `sa3.cpp`, and for the same reason:
@@ -161,19 +176,18 @@ git submodule update --init --recursive
 
 ```
 19c5421c   sa3.cpp's pin, upstream v0.17.0 + the fork's patch stack
-  |        (a4a52c4a, the fork's default tip, has a byte-identical tree)
   |
-  +-- 1b05d2b0   feature/audiocraft-cuda-tf32-v0.17.0   <- audiocraft.cpp pins this
-                 cuda : allow opting out of TF32 for F32 matmuls
+  +-- de8870f4   cuda : allow opting out of TF32 for F32 matmuls
+  +-- fff93d27   cuda : require a contiguous destination for the transposed copy
+  |              (tip of feature/shared-sa3-acestep-v0.17, via #6)
+  |
+  +-- d6e6604f   vulkan : read the batch stride of an in place mul_mat src from nb[2]
+                 (vulkan-mul-mat-strided-batch, #8)   <- audiocraft.cpp pins this
 ```
-
-One commit, default-preserving. `sa3.cpp` and `acestep.cpp` can move onto this branch
-whenever it suits without their output changing; the point of retesting them is to prove
-exactly that.
 
 Read the pin from a checkout rather than trusting this file:
 
 ```bash
-git -C ggml rev-parse HEAD          # 1b05d2b0...
+git -C ggml rev-parse HEAD          # d6e6604f...
 git -C ggml log --oneline 19c5421c..HEAD
 ```

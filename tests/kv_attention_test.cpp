@@ -12,6 +12,10 @@
 // combination -- a one-column query, a strided history, and a batch axis of 1 -- is the thing
 // to keep pinned, because it is the shape the whole autoregressive loop runs in and it is not
 // what a full-sequence forward exercises.
+//
+// It caught a second, unrelated backend bug the same way: Vulkan read the strided K history
+// with a packed batch stride, so every head past the first attended to the wrong keys, at
+// both n_seq values. See docs/MUSICGEN_LM.md.
 #include "mg/kv_cache.h"
 #include "nn.h"
 #include "test_backend.h"
