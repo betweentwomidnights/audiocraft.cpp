@@ -41,6 +41,17 @@ jobs:
           git -C ggml fetch --depth 1 origin "${{ inputs.ggml-ref }}"
           git -C ggml checkout --detach FETCH_HEAD
 
+      - name: Set up Python for trainer and converter fixtures
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install fixture dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements.txt
+
       - name: Build and test
         run: ./ci/ggml-check.sh
   cuda:
