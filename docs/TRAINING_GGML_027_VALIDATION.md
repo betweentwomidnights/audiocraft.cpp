@@ -43,17 +43,40 @@ selected backend. Both additive LoRA and fully differentiated DoRA rows pass:
 | --- | ---: | ---: |
 | CPU, F32 base | 4.78e-7 | 2.06e-6 |
 | CUDA, F16 base | 4.66e-7 | 1.26e-6 |
+| CUDA, F32 base | 5.37e-7 | 2.16e-6 |
 | NVIDIA Vulkan, F32 base | 4.79e-7 | 3.02e-6 |
+| NVIDIA Vulkan, F16 base | strict loss check fails; see below | 1.46e-6 |
 
-Twelve model/backend/adapter configurations cover 108 conditions and 324 optimizer
+Eighteen passing model/backend/adapter configurations cover 164 conditions and 492 optimizer
 updates. Conditions include zero/nonzero B, conditional, padded and null text;
 MusicGen also checks full-sequence/prefix masks, while MelodyFlow checks ordinary
 flow and edit-bridge/null-bridge targets. All losses, every adapter gradient and
 three Adam updates are compared. Worst Adam parameter absolute difference is
-1.80e-6 (existing bound 3e-5); maximum gradient relative L2 is 3.02e-6 (existing
+2.83e-6 (existing bound 3e-5); maximum gradient relative L2 is 3.02e-6 (existing
 bound 0.003). MusicGen additionally compares training logits with cached serving,
 checks unchanged prefix codes, and requires exact base output at adapter strength
 zero. No tolerance was changed.
+
+### Precision boundaries
+
+The additional F16 checks do **not** all pass the strict F32-reference oracle.
+CPU/F16 fails the first loss check for both models/adapter types; first-loss
+differences are about 1.56e-4 for MusicGen and 9.86e-4 for MelodyFlow, above the
+unchanged 2e-5 bound. Replaying against GGML 0.17 produces exactly the same
+losses, so this is a pre-existing precision boundary, not a new 0.27 regression.
+Use an F32 base for strict CPU training parity.
+
+MusicGen/F16 on NVIDIA Vulkan also misses that loss gate (about 6.06e-5 in the
+first fixture). Its full-model updates and exact-resume smoke test pass, but
+that does not establish strict oracle parity. Use F32 for Vulkan MusicGen
+training when reference parity is required. The old Vulkan pin lacked the
+cross-entropy training path, so an equivalent old-pin loss replay is unavailable.
+MelodyFlow/F16 passes the Vulkan oracle. These observations are not resolved by
+loosening the tests or reported as passing configurations.
+
+Prepare caches against the same converted base file used for training. In
+particular, rebuild MusicGen projected text caches when changing base precision;
+matching model names alone do not prove identical conditioner projections.
 
 Example replay (use `mf` for MelodyFlow and the corresponding probe):
 
@@ -73,6 +96,8 @@ Local logs and replay commands are retained under `C:/ac7/`: `training-*-build.l
 `training-*-ctest.log`, `training-*-*-integration.log`,
 `training-oracles/summary.json` and per-case `results.json`, plus
 `full-model-training/summary.json` and `resume-summary.json`.
+Additional dtype checks and the old-pin CPU/F16 replay are in
+`training-oracles-extra` and `training-oracles-old-half` respectively.
 The executable build trees reuse the validated GGML 0.27 candidate builds; their
 application checkout was explicitly advanced to the merged training commit.
 
