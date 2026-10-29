@@ -210,6 +210,12 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
         add_test(NAME mf_lora COMMAND mf_lora_test)
         set_tests_properties(mf_lora PROPERTIES LABELS "melodyflow;training")
     endif()
+    if(AC_BUILD_MELODYFLOW)
+        add_executable(dit_precision_test tests/dit_precision_test.cpp)
+        target_link_libraries(dit_precision_test PRIVATE ac_melodyflow)
+        add_test(NAME dit_precision COMMAND dit_precision_test)
+        set_tests_properties(dit_precision PROPERTIES LABELS "non-gpu;melodyflow")
+    endif()
     # Prefer the repo venv: the converter tests need gguf/numpy/safetensors, which a bare
     # system interpreter usually lacks (they would silently skip instead of running).
     if(WIN32)

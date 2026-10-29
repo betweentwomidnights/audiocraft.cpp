@@ -222,4 +222,15 @@ inline size_t dit_graph_nodes(const DitConfig& c) {
     return (size_t)c.layers * 96 + 256;
 }
 
+// F32 model tiers must retain F32 operands on backends whose default stages
+// matmuls through half precision. Leave reduced-precision weight tiers alone.
+inline void dit_set_matmul_precision(ggml_cgraph* graph) {
+    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+        auto n = ggml_graph_node(graph, i);
+        if (n->op == GGML_OP_MUL_MAT && n->src[0]->type == GGML_TYPE_F32 &&
+            n->src[1]->type == GGML_TYPE_F32)
+            ggml_mul_mat_set_prec(n, GGML_PREC_F32);
+    }
+}
+
 } // namespace ac

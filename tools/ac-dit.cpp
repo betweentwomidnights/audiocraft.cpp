@@ -213,6 +213,7 @@ int main(int argc, char** argv) {
         ggml_set_output(velocity);
         ggml_cgraph* graph = ggml_new_graph_custom(arena.ctx, ac::dit_graph_nodes(c), false);
         ggml_build_forward_expand(graph, velocity);
+        ac::dit_set_matmul_precision(graph);
         arena.alloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(dit.backend));
         if (!arena.alloc || !ggml_gallocr_alloc_graph(arena.alloc, graph))
             throw std::runtime_error("failed to allocate the DiT graph");
