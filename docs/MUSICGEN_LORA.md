@@ -127,10 +127,10 @@ inference arithmetic, with a 0.002 absolute-logit bound; CPU uses 0.00003.
 See [DORA_ROWS.md](DORA_ROWS.md) for the shared row-normalization and strength
 convention. These checks establish implementation correctness, not musical quality.
 
-MusicGen training currently requires CPU or CUDA: this GGML fork's Vulkan backend
-does not support `CROSS_ENTROPY_LOSS`. Unsupported training ops are rejected before
-graph allocation. Shared DoRA projection/inference support is separate from this
-training limitation.
+GGML 0.27 adds Vulkan cross-entropy forward/backward support. MusicGen training
+now runs on CPU, CUDA and Vulkan; the earlier 0.17 Vulkan limitation no longer
+applies. Unsupported training ops are still rejected before graph allocation.
+See [GGML 0.27 training validation](TRAINING_GGML_027_VALIDATION.md).
 
 ## First Koan pilot
 

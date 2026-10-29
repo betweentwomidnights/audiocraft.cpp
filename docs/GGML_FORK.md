@@ -223,14 +223,15 @@ git -C ggml log --oneline 19c5421c..HEAD
 The fork provides the backward primitives, but a complete model still needs gradient
 validation. MelodyFlow's experimental trainer uses a differentiable LayerNorm
 (SUM_ROWS, SCALE, centering, RMSNorm) and an erf approximation built from elementary
-ops because NORM and GELU_ERF have no autodiff rules. MEAN backward assumes a scalar,
-so SUM_ROWS is necessary for a multi-token input.
+ops. The original 0.17 audit found missing NORM/GELU_ERF autodiff and a scalar-only
+MEAN backward; the trainer retains these validated portable formulations on 0.27.
 
-CONCAT backward assumes a contiguous fastest dimension. V's attention transpose
+The original CONCAT backward assumed a contiguous fastest dimension. V's attention transpose
 produces a strided incoming gradient; a training-only CONT before that transpose
 restores the layout before it reaches CONCAT. The DiT's final scaling is also moved
 after its output transpose in training to satisfy SCALE backward's layout contract.
-These changes leave the inference operation path intact. The complete tiny-DiT test
+The 0.27 fork fixes noncontiguous CONCAT gradients, but the explicit layout handling
+is retained and tested. These changes leave the inference operation path intact. The complete tiny-DiT test
 checks finite differences through fused QKV, attention, stored-frequency RoPE, and
 U-ViT skips; a decreasing training loss alone is insufficient validation.
 

@@ -104,8 +104,9 @@ a training probe. It is a diagnostic, not a comprehensive quality score.
 
 `--checkpoint-every 250` saves adapters and runs the same probe every 250 steps.
 For `--out adapter.gguf`, intermediate files are `adapter.step-250.gguf`, etc.
-These contain adapter weights only, not optimizer state; training cannot resume
-from them. Select checkpoints using validation and listening, rather than assuming
+The GGUF contains adapter weights; the accompanying `.gguf.state` now preserves
+optimizer and sampling state for exact resume. See [shared controls](TRAINING_CONTROLS.md).
+Select checkpoints using validation and listening, rather than assuming
 that the final step is best.
 
 ## Longer-window experiment
@@ -313,8 +314,8 @@ than selecting 3000 steps as a new default based on training duration alone.
 
 ## Limits and MusicGen follow-up
 
-There is no optimizer resume, gradient accumulation,
-activation checkpointing, training web UI or HTTP adapter selection yet. CLI
+Optimizer resume, gradient accumulation, random crops, and HTTP adapter selection
+are implemented. Activation checkpointing and a training web UI remain future work. CLI
 adapters apply to both inversion and generation by default.
 `mf-edit --lora-pass generation` instead uses the base model for inversion and the adapter for generation.
 This creates two DiT graph arenas sharing the same frozen weights. Model-name and tensor-shape
@@ -323,13 +324,10 @@ against. Test Metal separately before claiming support; CPU/CUDA/Vulkan validati
 does not establish Metal training support. Reduce window length or the number of
 adapted layers when the backward graph exceeds device memory.
 
-MusicGen can reuse the functional LoRA, LayerNorm and GELU pieces, but needs a
-separate teacher-forced training graph. Its inference graph writes a KV cache and
-reads only the final token, which is unsuitable as the training graph. A trainer
-must preserve the delayed codebook pattern, shift inputs against targets correctly,
-mask special/delay/padded positions, and compute cross-entropy over valid tokens.
-For continuation adaptation, context audio tokens should condition the prediction
-while loss can focus on the continuation. Cache EnCodec tokens instead of VAE
-posteriors and evaluate held-out continuation audio against the existing fine-tune.
+MusicGen's separate teacher-forced graph, delayed-codebook handling and valid-token
+cross-entropy are implemented in `src/mg/train.h`. Ordinary generation training
+is the default; prefix-masked training remains an optional ablation. See
+[MUSICGEN_LORA.md](MUSICGEN_LORA.md) and
+[GGML 0.27 training validation](TRAINING_GGML_027_VALIDATION.md).
 
 See [TRAINING_CONTROLS.md](TRAINING_CONTROLS.md) for shared optimizer controls, broader cache coverage, random crops, FFN targets, and exact resume.
