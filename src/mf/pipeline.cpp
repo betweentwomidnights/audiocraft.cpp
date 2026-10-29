@@ -90,6 +90,7 @@ DitRunner::DitRunner(const GgufModel& dit, const DitConfig& config, const TextCo
     ggml_set_output(s.velocity_t);
     s.graph = ggml_new_graph_custom(s.ctx, dit_graph_nodes(config), false);
     ggml_build_forward_expand(s.graph, s.velocity_t);
+    dit_set_matmul_precision(s.graph);
     s.alloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(dit.backend));
     if (!s.alloc || !ggml_gallocr_alloc_graph(s.alloc, s.graph))
         throw std::runtime_error("failed to allocate the DiT graph");

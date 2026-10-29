@@ -4,9 +4,13 @@
 [`betweentwomidnights/ggml`](https://github.com/betweentwomidnights/ggml), the fork shared
 with `sa3.cpp` and `acestep.cpp`.
 
-Current pin: `f30f0cdc`
+Current pin: `b77ae790e628270af46a8af1eca38441c23f1252`, the shared fork based on
+upstream GGML 0.27, replacing `60f49e09`. See [PR #7 validation](GGML_PR7_VALIDATION.md)
+for CUDA/Vulkan checks and the MelodyFlow F32 precision correction.
+
+Historical backend correctness work: `f30f0cdc`
 ([betweentwomidnights/ggml#11](https://github.com/betweentwomidnights/ggml/pull/11)), which
-every consumer of the fork pins. It is `07f9348a`, the shared Vulkan candidate
+was previously shared by the consumers. It is `07f9348a`, the shared Vulkan candidate
 ([#10](https://github.com/betweentwomidnights/ggml/pull/10)), plus its Metal counterpart. Both
 sit on `fff93d27`, the earlier tip of `feature/shared-sa3-acestep-v0.17`. That tip is
 `19c5421c` (upstream ggml `v0.17.0` plus the fork's patch stack), with the two CUDA commits from
@@ -30,8 +34,8 @@ On Vulkan, these bring the MelodyFlow VAE and EnCodec to cossim 1.0000000 agains
 greedy MusicGen to 100% of tokens. On an Apple M4, measured against the same machine's CPU, the
 VAE latent goes from 77.3 to 118.1 dB, and EnCodec codes go from 1999/2000 to 2000/2000.
 
-The rest of the fork's patch stack — CPU/CUDA/Vulkan/Metal autodiff and backend work, the Q4_K_M
-`get_rows` fix, the wide-row `SET` fix, quantized-`src0` `OUT_PROD` — is documented in
+The rest of the fork's patch stack â€” CPU/CUDA/Vulkan/Metal autodiff and backend work, the Q4_K_M
+`get_rows` fix, the wide-row `SET` fix, quantized-`src0` `OUT_PROD` â€” is documented in
 **`sa3.cpp/docs/GGML_FORK.md`**, which is the source of truth. None of it is inference
 forward-op work; the models here use stock ggml operations.
 
@@ -142,7 +146,7 @@ Per the pin policy below, and because the branch changes CUDA numerics for every
 takes it:
 
 1. Build `sa3.cpp` and `acestep.cpp` against this branch on CUDA.
-2. Confirm their outputs are unchanged with `GGML_CUDA_TF32` unset — that is the whole point
+2. Confirm their outputs are unchanged with `GGML_CUDA_TF32` unset â€” that is the whole point
    of leaving the default alone, and it is the regression test.
 3. Optionally measure what they gain from `GGML_CUDA_TF32=0`; both have convolutional
    decoders, so `sa3.cpp`'s Oobleck is a plausible beneficiary.
@@ -204,12 +208,12 @@ git submodule update --init --recursive
   +-- 3163749a   metal : fix NORM/RMS_NORM for row lengths that leave a partial simdgroup
   +-- c4146532   metal : honor GGML_PREC_F32 for f32 x f32 mul_mm
   +-- f30f0cdc   tests : keep the default MUL_MAT prec=f32 bound on CUDA while TF32 is on
-                 (#11)   <- audiocraft.cpp pins this
+                 (#11)   historical pin
 ```
 
 Read the pin from a checkout rather than trusting this file:
 
 ```bash
-git -C ggml rev-parse HEAD          # f30f0cdc...
+git -C ggml rev-parse HEAD          # b77ae790...
 git -C ggml log --oneline 19c5421c..HEAD
 ```
