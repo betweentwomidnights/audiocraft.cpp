@@ -192,6 +192,8 @@ struct Session {
     std::string model;                  // gary: which checkpoint this session used
     int prompt_duration = 0;            // gary: so a retry can reuse it
     std::string description;
+    std::string adapter;
+    float adapter_strength = 1.0f;
     double created = 0.0;
     double finished = 0.0;
 };

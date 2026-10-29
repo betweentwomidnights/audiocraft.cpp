@@ -21,6 +21,7 @@
 #include "mg/encodec.h"
 #include "mg/pipeline.h"
 #include "serve/http.h"
+#include "serve/adapters.h"
 
 #include "httplib.h"
 #include "yyjson.h"
@@ -38,6 +39,8 @@ namespace {
 
 using namespace ac::serve;
 
+AdapterCatalog g_adapters;
+std::string g_adapters_dir;
 std::string g_models_dir;
 std::string g_device;
 std::string g_codec, g_t5;
@@ -149,6 +152,7 @@ struct Json {
 // --- generation ------------------------------------------------------------------------------
 
 struct GenerateRequest {
+    std::string adapter; float adapter_strength=1;
     std::string audio_b64;
     std::string model;
     std::string description;
@@ -196,6 +200,8 @@ std::string run_generation(const GenerateRequest& req, const std::string& sessio
         ac::GgufModel lm = ac::load_gguf(
             it->second.c_str(), ac::make_backend(0, g_device.empty() ? nullptr : g_device.c_str()));
         const ac::LmConfig c = ac::LmConfig::from(lm);
+        ac::GgufModel adapter;ac::LoraMap adapters;
+        if(!req.adapter.empty()){adapter=ac::load_gguf(g_adapters.path(req.adapter).c_str(),lm.backend);adapters=ac::load_mg_lora(lm,adapter,req.adapter_strength);}
         ac::GenerateParams params;
         params.max_gen_len = (int)(req.duration * frame_rate);
         params.use_sampling = true;
@@ -209,7 +215,7 @@ std::string run_generation(const GenerateRequest& req, const std::string& sessio
         auto progress = [&session](int done, int total) {
             g_sessions.set_progress(session, done, total);
         };
-        codes = ac::mg_generate(lm, c, cond, prompt_codes, prompt_len, params, progress, report);
+        codes = ac::mg_generate(lm, c, cond, prompt_codes, prompt_len, params, progress, report,adapters.empty()?nullptr:&adapters);
     }
 
     ac::GgufModel codec = ac::load_gguf(
@@ -226,7 +232,7 @@ std::string run_generation(const GenerateRequest& req, const std::string& sessio
     return encode_audio(audio, (int)out_samples, channels, sample_rate);
 }
 
-GenerateRequest parse_generate(const Json& body, bool from_start) {
+GenerateRequest parse_generate(const Json& body, bool from_start, const Session* previous = nullptr) {
     GenerateRequest req;
     req.audio_b64 = body.str("audio_data");
     req.model = body.str("model_name");
@@ -237,6 +243,15 @@ GenerateRequest parse_generate(const Json& body, bool from_start) {
     req.temperature = (float)body.num("temperature", 1.0);
     req.cfg_coef = (float)body.num("cfg_coef", 3.0);
     req.seed = resolve_seed(body.seed());
+    req.adapter=body.str("adapter",previous?previous->adapter:"");
+    req.adapter_strength=(float)body.num("adapter_strength",previous&&previous->adapter==req.adapter?previous->adapter_strength:1);
+    if(!std::isfinite(req.adapter_strength))throw std::runtime_error("adapter strength must be finite");
+    if(!req.adapter.empty())g_adapters.path(req.adapter);
+    if(yyjson_is_true(yyjson_obj_get(body.root,"smart_dice"))) {
+        if(!req.description.empty())throw std::runtime_error("smart_dice and description are mutually exclusive");
+        if(req.adapter.empty())throw std::runtime_error("smart_dice requires an adapter");
+        req.description=ac::dice_prompt(ac::prompt_pool_path(g_adapters.path(req.adapter)),req.seed);
+    }
     req.from_start = from_start;
     return req;
 }
@@ -263,6 +278,15 @@ void start_generation(GenerateRequest req, const char* started_message,
         res.set_content(json_error("Unknown model: " + req.model), "application/json");
         return;
     }
+    if (!req.adapter.empty()) {
+        auto adapter = ac::load_gguf_metadata(g_adapters.path(req.adapter).c_str());
+        auto base = ac::load_gguf_metadata(g_lms.at(req.model).c_str());
+        if (adapter.string("ac.lora.base_name") != base.string("general.name")) {
+            res.status = 400;
+            res.set_content(json_error("adapter base model does not match selected model"), "application/json");
+            return;
+        }
+    }
 
     Session initial;
     initial.status = "queued";
@@ -270,6 +294,8 @@ void start_generation(GenerateRequest req, const char* started_message,
     initial.model = req.model;
     initial.prompt_duration = (int)req.prompt_duration;
     initial.description = req.description;
+    initial.adapter = req.adapter;
+    initial.adapter_strength = req.adapter_strength;
     // Kept so `retry_music` can run the same input again: the Python service is explicit
     // that a retry reuses the last *input* audio, not the last result.
     initial.original_b64 = req.audio_b64;
@@ -289,6 +315,8 @@ void start_generation(GenerateRequest req, const char* started_message,
                         .boolean("success", true)
                         .str("session_id", id)
                         .num("seed", (double)req.seed)
+                        .str("adapter", req.adapter)
+                        .str("description", req.description)
                         .str("message", started_message)
                         .str(),
                     "application/json");
@@ -296,7 +324,7 @@ void start_generation(GenerateRequest req, const char* started_message,
 
 void usage() {
     fprintf(stderr,
-        "usage: musicgen-server [--port 8000] [--models-dir DIR] [--device NAME]\n"
+        "usage: musicgen-server [--port 8000] [--models-dir DIR] [--device NAME] [--adapters-dir DIR]\n"
         "\n"
         "Serves MusicGen continuation on the same routes as gary4local's gary service.\n"
         "Every musicgen-*.gguf in --models-dir (or AC_MODELS_DIR) is offered by\n"
@@ -320,6 +348,7 @@ int main(int argc, char** argv) {
         if (a == "--port") port = atoi(next("--port").c_str());
         else if (a == "--host") host = next("--host");
         else if (a == "--models-dir") g_models_dir = next("--models-dir");
+        else if (a == "--adapters-dir") g_adapters_dir=next("--adapters-dir");
         else if (a == "--device") g_device = next("--device");
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else { fprintf(stderr, "error: unknown argument '%s'\n", a.c_str()); usage(); return 2; }
@@ -335,7 +364,10 @@ int main(int argc, char** argv) {
     for (const auto& kv : g_lms) fprintf(stderr, "[ac]   %s -> %s\n", kv.first.c_str(),
                                          kv.second.c_str());
 
+    if(g_adapters_dir.empty())g_adapters_dir=g_models_dir+"/adapters";
+    g_adapters.discover(g_adapters_dir,"ac-musicgen-lora");
     httplib::Server server;
+    g_adapters.routes(server);
     server.set_payload_max_length(256ull * 1024 * 1024);
 
     server.Get("/health", [](const httplib::Request&, httplib::Response& res) {
@@ -379,7 +411,7 @@ int main(int argc, char** argv) {
                 Json body(req.body);
                 start_generation(parse_generate(body, from_start), message, res);
             } catch (const std::exception& e) {
-                res.status = 500;
+                res.status = 400;
                 res.set_content(json_error(e.what()), "application/json");
             }
         };
@@ -411,7 +443,7 @@ int main(int argc, char** argv) {
                                 "application/json");
                 return;
             }
-            GenerateRequest req2 = parse_generate(body, /*from_start=*/false);
+            GenerateRequest req2 = parse_generate(body, /*from_start=*/false, &previous);
             req2.audio_b64 = previous.original_b64;
             if (req2.model.empty()) req2.model = previous.model;
             if (!body.num("prompt_duration", 0.0) && previous.prompt_duration > 0)
@@ -419,7 +451,7 @@ int main(int argc, char** argv) {
             if (req2.description.empty()) req2.description = previous.description;
             start_generation(req2, "Retry processing started", res);
         } catch (const std::exception& e) {
-            res.status = 500;
+            res.status = 400;
             res.set_content(json_error(e.what()), "application/json");
         }
     });

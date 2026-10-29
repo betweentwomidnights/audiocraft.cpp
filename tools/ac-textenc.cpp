@@ -11,6 +11,7 @@
 // is what exercises the mask path.
 #include "ac/t5.h"
 #include "ac/tokenizer.h"
+#include "ac/prompt_file.h"
 #include "gguf_model.h"
 
 #include <cmath>
@@ -36,6 +37,7 @@ void usage() {
             "usage: ac-textenc --t5 <t5.gguf> --prompt <text> [options]\n"
             "\n"
             "  --prompt <text>   repeatable; each prompt is encoded separately\n"
+            "  --prompt-file P   repeatable UTF-8 caption file (optional BOM)\n"
             "  --out <path>      write the hidden state as raw f32 [dim, seq] (ne0 fastest)\n"
             "  --seq N           pad/truncate to N tokens and use an -inf key mask\n"
             "                    (default: each prompt's own token count, no padding)\n"
@@ -59,6 +61,10 @@ int main(int argc, char** argv) {
         };
         if (a == "--t5") t5_path = next("--t5");
         else if (a == "--prompt") prompts.push_back(next("--prompt"));
+        else if (a == "--prompt-file") {
+            try { prompts.push_back(ac::read_prompt_file(next("--prompt-file"))); }
+            catch (const std::exception& e) { fprintf(stderr,"error: %s\n",e.what()); return 2; }
+        }
         else if (a == "--out") out_path = next("--out");
         else if (a == "--seq") forced_seq = std::atoi(next("--seq").c_str());
         else if (a == "--device") device = next("--device");

@@ -113,6 +113,8 @@ add_subdirectory(ggml)
 
 # src/ is header-driven; families add their own STATIC libraries below.
 add_library(ac INTERFACE)
+add_library(ac_json STATIC vendor/yyjson/yyjson.c)
+target_include_directories(ac_json PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/vendor/yyjson)
 target_include_directories(ac INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(ac INTERFACE ggml)
 
@@ -144,13 +146,23 @@ if(AC_BUILD_TOOLS)
     target_link_libraries(ac-encodec PRIVATE ac)
 
     if(AC_BUILD_MELODYFLOW)
+        add_executable(mf-train tools/mf-train.cpp)
+        target_link_libraries(mf-train PRIVATE ac_melodyflow)
+        target_link_libraries(mf-train PRIVATE ac_json)
+        add_executable(mf-edit-cache tools/mf-edit-cache.cpp)
+        target_link_libraries(mf-edit-cache PRIVATE ac_melodyflow)
+
         add_executable(mf-edit tools/mf-edit.cpp)
         target_link_libraries(mf-edit PRIVATE ac_melodyflow)
+        target_link_libraries(mf-edit PRIVATE ac_json)
     endif()
 
     if(AC_BUILD_MUSICGEN)
         add_executable(mg-generate tools/mg-generate.cpp)
         target_link_libraries(mg-generate PRIVATE ac_musicgen)
+        target_link_libraries(mg-generate PRIVATE ac_json)
+        add_executable(mg-train tools/mg-train.cpp)
+        target_link_libraries(mg-train PRIVATE ac_musicgen ac_json)
     endif()
 
     # --- the two HTTP services -------------------------------------------------------
@@ -158,10 +170,8 @@ if(AC_BUILD_TOOLS)
     # third-party sources and their noise would drown ours.
     find_package(Threads REQUIRED)
     function(ac_add_server target source family)
-        add_executable(${target} ${source}
-            vendor/cpp-httplib/httplib.cpp
-            vendor/yyjson/yyjson.c)
-        target_link_libraries(${target} PRIVATE ${family} Threads::Threads)
+        add_executable(${target} ${source} vendor/cpp-httplib/httplib.cpp)
+        target_link_libraries(${target} PRIVATE ${family} ac_json Threads::Threads)
         target_include_directories(${target} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/vendor/cpp-httplib
             ${CMAKE_CURRENT_SOURCE_DIR}/vendor/yyjson)
@@ -184,6 +194,22 @@ endif()
 
 # --- tests -----------------------------------------------------------------
 if(BUILD_TESTING AND AC_BUILD_TOOLS)
+    add_executable(prompt_file_test tests/prompt_file_test.cpp)
+    target_link_libraries(prompt_file_test PRIVATE ac)
+    add_test(NAME prompt_file COMMAND prompt_file_test)
+    set_tests_properties(prompt_file PROPERTIES LABELS "non-gpu;shared;tooling")
+    if(AC_BUILD_MUSICGEN)
+        add_executable(mg_train_parity_probe tests/mg_train_parity_probe.cpp)
+        target_link_libraries(mg_train_parity_probe PRIVATE ac_musicgen)
+    endif()
+    if(AC_BUILD_MELODYFLOW)
+        add_executable(mf_lora_test tests/mf_lora_test.cpp)
+        target_link_libraries(mf_lora_test PRIVATE ac_melodyflow)
+        add_executable(mf_train_parity_probe tests/mf_train_parity_probe.cpp)
+        target_link_libraries(mf_train_parity_probe PRIVATE ac_melodyflow)
+        add_test(NAME mf_lora COMMAND mf_lora_test)
+        set_tests_properties(mf_lora PROPERTIES LABELS "melodyflow;training")
+    endif()
     # Prefer the repo venv: the converter tests need gguf/numpy/safetensors, which a bare
     # system interpreter usually lacks (they would silently skip instead of running).
     if(WIN32)
@@ -209,6 +235,11 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     target_link_libraries(lstm_test PRIVATE ac)
     add_test(NAME lstm COMMAND lstm_test)
     set_tests_properties(lstm PROPERTIES LABELS "non-gpu;shared")
+
+    add_executable(train_controls_test tests/train_controls_test.cpp)
+    target_link_libraries(train_controls_test PRIVATE ac)
+    add_test(NAME train_controls COMMAND train_controls_test)
+    set_tests_properties(train_controls PROPERTIES LABELS "non-gpu;shared;training")
 
     add_executable(graph_reuse_test tests/graph_reuse_test.cpp)
     target_link_libraries(graph_reuse_test PRIVATE ac)
@@ -266,6 +297,19 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     set_tests_properties(t5_bucket PROPERTIES LABELS "non-gpu;shared")
 
     if(AC_PYTHON)
+        add_test(NAME train_cache_windows
+                 COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/train_cache_windows_test.py)
+        set_tests_properties(train_cache_windows PROPERTIES LABELS "non-gpu;shared;training;tooling")
+        if(AC_BUILD_MUSICGEN)
+            add_test(NAME mg_train_cli
+                     COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/mg_train_cli_test.py $<TARGET_FILE:mg-train>)
+            set_tests_properties(mg_train_cli PROPERTIES LABELS "non-gpu;musicgen;training;tooling")
+        endif()
+        if(AC_BUILD_MELODYFLOW)
+            add_test(NAME mf_train_cli
+                     COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/mf_train_cli_test.py $<TARGET_FILE:mf-train> $<TARGET_FILE:mf-edit-cache>)
+            set_tests_properties(mf_train_cli PROPERTIES LABELS "non-gpu;melodyflow;training;tooling")
+        endif()
         add_test(NAME t5_converter
                  COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/t5_converter_test.py)
         set_tests_properties(t5_converter PROPERTIES LABELS "non-gpu;tooling")

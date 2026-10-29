@@ -49,6 +49,14 @@ the plugin talks to them unmodified.
 
 ## Docs
 
+Experimental native MelodyFlow LoRA training and `mf-edit --lora` are described in
+[MELODYFLOW_LORA.md](docs/MELODYFLOW_LORA.md), including cache preparation, the first
+Keygen pilot and current limitations.
+Shared [DoRA-rows support](docs/DORA_ROWS.md) is available in the MelodyFlow
+trainer and loader. [MusicGen DoRA training](docs/MUSICGEN_LORA.md) now supports
+full-sequence training, generation/continuation inference, and shared smart-dice
+prompt-pool sidecars for both models' CLIs and HTTP services.
+
 Per-model write-ups — architecture, the parity numbers, and what is deliberately left out —
 live in [docs/](docs/): [MUSICGEN_LM.md](docs/MUSICGEN_LM.md),
 [MUSICGEN_ENCODEC.md](docs/MUSICGEN_ENCODEC.md), [MELODYFLOW_EDIT.md](docs/MELODYFLOW_EDIT.md),

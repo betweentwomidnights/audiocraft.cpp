@@ -15,6 +15,7 @@
 #pragma once
 
 #include "ac/transformer.h"
+#include "ac/lora.h"
 #include "ggml.h"
 #include "gguf_model.h"
 
@@ -104,13 +105,17 @@ inline SkipPlan dit_skip_plan(int idx, const DitConfig& c) {
 inline ggml_tensor* dit_block(ggml_context* ctx, const GgufModel& W, const std::string& p,
                               ggml_tensor* x, ggml_tensor* context, ggml_tensor* t_emb,
                               ggml_tensor* pos, ggml_tensor* freq_factors,
-                              ggml_tensor* cross_mask, const DitConfig& c) {
+                              ggml_tensor* cross_mask, const DitConfig& c,
+                              const LoraMap* adapters = nullptr, bool training = false) {
     const int dim = c.dim;
-    const int64_t seq = x->ne[1];
+    auto norm = [&](const std::string& name, ggml_tensor* input) {
+        return training ? train_layer_norm(ctx, W, p + name, input, c.norm_eps)
+                        : layer_norm(ctx, W, p + name, input, c.norm_eps);
+    };
 
     // --- self-attention: pre-norm, plus the timestep, RoPE on q and k ---
-    ggml_tensor* h = ggml_add(ctx, layer_norm(ctx, W, p + "norm1", x, c.norm_eps), t_emb);
-    ggml_tensor* qkv = ggml_mul_mat(ctx, W.get(p + "self.qkv.weight"), h);   // [3*dim, seq]
+    ggml_tensor* h = ggml_add(ctx, norm("norm1", x), t_emb);
+    ggml_tensor* qkv = lora_linear(ctx, W, p + "self.qkv.weight", h, adapters);   // [3*dim, seq]
     ggml_tensor* q = to_heads(ctx, qkv_slice(ctx, qkv, dim, 0), c.head_dim, c.heads);
     ggml_tensor* k = to_heads(ctx, qkv_slice(ctx, qkv, dim, 1), c.head_dim, c.heads);
     ggml_tensor* v = to_heads(ctx, qkv_slice(ctx, qkv, dim, 2), c.head_dim, c.heads);
@@ -120,27 +125,30 @@ inline ggml_tensor* dit_block(ggml_context* ctx, const GgufModel& W, const std::
     q = rope_stored(ctx, q, pos, freq_factors, c.head_dim);
     k = rope_stored(ctx, k, pos, freq_factors, c.head_dim);
     ggml_tensor* o = attention(ctx, to_attention(ctx, q), to_attention(ctx, k),
-                               to_attention(ctx, v), nullptr, c.add_zero_attn);
-    o = ggml_mul_mat(ctx, W.get(p + "self.out.weight"), from_heads(ctx, o, dim));
+                               to_attention(ctx, v), nullptr, c.add_zero_attn, training);
+    o = lora_linear(ctx, W, p + "self.out.weight", from_heads(ctx, o, dim), adapters);
     x = ggml_add(ctx, x, o);
 
     // --- cross-attention: pre-norm, plus the timestep again; no rotary here ---
-    ggml_tensor* hc = ggml_add(ctx, layer_norm(ctx, W, p + "norm_cross", x, c.norm_eps), t_emb);
-    ggml_tensor* cq = ggml_mul_mat(ctx, W.get(p + "cross.q.weight"), hc);         // [dim, seq]
-    ggml_tensor* ckv = ggml_mul_mat(ctx, W.get(p + "cross.kv.weight"), context);  // [2*dim, ctx]
+    ggml_tensor* hc = ggml_add(ctx, norm("norm_cross", x), t_emb);
+    ggml_tensor* cq = lora_linear(ctx, W, p + "cross.q.weight", hc, adapters);         // [dim, seq]
+    ggml_tensor* ckv = lora_linear(ctx, W, p + "cross.kv.weight", context, adapters);  // [2*dim, ctx]
     ggml_tensor* q2 = to_attention(ctx, to_heads(ctx, cq, c.head_dim, c.heads));
     ggml_tensor* k2 = to_attention(ctx, to_heads(ctx, qkv_slice(ctx, ckv, dim, 0),
                                                  c.head_dim, c.heads));
     ggml_tensor* v2 = to_attention(ctx, to_heads(ctx, qkv_slice(ctx, ckv, dim, 1),
                                                  c.head_dim, c.heads));
-    ggml_tensor* oc = attention(ctx, q2, k2, v2, cross_mask, c.add_zero_attn);
-    oc = ggml_mul_mat(ctx, W.get(p + "cross.out.weight"), from_heads(ctx, oc, dim));
+    ggml_tensor* oc = attention(ctx, q2, k2, v2, cross_mask, c.add_zero_attn, training);
+    oc = lora_linear(ctx, W, p + "cross.out.weight", from_heads(ctx, oc, dim), adapters);
     x = ggml_add(ctx, x, oc);
 
     // --- feed-forward: pre-norm, and note the timestep is NOT added here ---
-    ggml_tensor* f = layer_norm(ctx, W, p + "norm2", x, c.norm_eps);
-    (void)seq;
-    return ggml_add(ctx, x, feed_forward(ctx, W, p + "ff.", f));
+    ggml_tensor* f = norm("norm2", x);
+    if (!training) return ggml_add(ctx, x, lora_linear(ctx, W, p + "ff.2.weight", ggml_gelu_erf(ctx, lora_linear(ctx, W, p + "ff.0.weight", f, adapters)), adapters));
+    ggml_tensor* ff = lora_linear(ctx, W, p + "ff.0.weight", f, adapters);
+    ff = train_gelu(ctx, ff);
+    ff = lora_linear(ctx, W, p + "ff.2.weight", ff, adapters);
+    return ggml_add(ctx, x, ff);
 }
 
 // The full velocity prediction.
@@ -152,7 +160,8 @@ inline ggml_tensor* dit_block(ggml_context* ctx, const GgufModel& W, const std::
 inline ggml_tensor* dit_forward(ggml_context* ctx, const GgufModel& W, ggml_tensor* latent,
                                 ggml_tensor* rescale, ggml_tensor* t_feat,
                                 ggml_tensor* t5_hidden, ggml_tensor* pos,
-                                ggml_tensor* cross_mask, const DitConfig& c) {
+                                ggml_tensor* cross_mask, const DitConfig& c,
+                                const LoraMap* adapters = nullptr, bool training = false) {
     // FlowModel.forward rescales the input so its standard deviation stays 1 whatever the
     // flow step. `rescale` is an input rather than a baked-in constant so that a whole solve
     // -- 125 forwards for terry -- runs on one graph and one allocation.
@@ -187,12 +196,16 @@ inline ggml_tensor* dit_forward(ggml_context* ctx, const GgufModel& W, ggml_tens
                                         ".weight"), x);
         }
         x = dit_block(ctx, W, "dit." + std::to_string(idx) + ".", x, context, t_emb, pos,
-                      freq_factors, cross_mask, c);
+                      freq_factors, cross_mask, c, adapters, training);
         if (plan.produces) saved.push_back(x);
     }
 
-    x = layer_norm(ctx, W, "dit.out_norm", x, c.norm_eps);
+    x = training ? train_layer_norm(ctx, W, "dit.out_norm", x, c.norm_eps)
+                 : layer_norm(ctx, W, "dit.out_norm", x, c.norm_eps);
     x = ggml_mul_mat(ctx, W.get("dit.out_proj.weight"), x);          // [latent_dim, seq]
+    // Keep SCALE's training gradient contiguous: transpose-backward is a strided view.
+    if (training)
+        return ggml_scale(ctx, ggml_cont(ctx, ggml_transpose(ctx, x)), std::sqrt(2.0f));
     // FlowModel scales the output by sqrt(2) so the DiT's output std stays 1.
     x = ggml_scale(ctx, x, std::sqrt(2.0f));
     return ggml_cont(ctx, ggml_transpose(ctx, x));                   // [seq, latent_dim]

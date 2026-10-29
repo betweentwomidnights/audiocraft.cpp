@@ -4,6 +4,7 @@
 // SentencePiece-encodes the text and appends </s>. With a single prompt there is nothing
 // to pad to, so the id sequence printed here is exactly what the reference produces.
 #include "ac/tokenizer.h"
+#include "ac/prompt_file.h"
 
 #include <cstdio>
 #include <cstring>
@@ -16,6 +17,7 @@ void usage() {
     fprintf(stderr,
             "usage: ac-tokenize --t5 <t5.gguf> --prompt <text> [--max-length N]\n"
             "\n"
+            "  --prompt-file P  UTF-8 caption file (optional BOM)\n"
             "  --max-length N   truncate to N ids (0 = no limit, the audiocraft default)\n");
 }
 
@@ -34,6 +36,10 @@ int main(int argc, char** argv) {
         };
         if (a == "--t5") t5_path = next("--t5");
         else if (a == "--prompt") prompts.push_back(next("--prompt"));
+        else if (a == "--prompt-file") {
+            try { prompts.push_back(ac::read_prompt_file(next("--prompt-file"))); }
+            catch (const std::exception& e) { fprintf(stderr,"error: %s\n",e.what()); return 2; }
+        }
         else if (a == "--max-length") max_length = std::atoi(next("--max-length").c_str());
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else { fprintf(stderr, "error: unknown argument '%s'\n", a.c_str()); usage(); return 2; }

@@ -23,6 +23,7 @@
 #include "mf/variations.h"
 #include "rng.h"
 #include "serve/http.h"
+#include "serve/adapters.h"
 
 #include "httplib.h"
 #include "yyjson.h"
@@ -37,6 +38,8 @@ namespace {
 
 using namespace ac::serve;
 
+AdapterCatalog g_adapters;
+std::string g_adapters_dir;
 std::string g_models_dir;
 std::string g_device;
 std::string g_dit, g_codec, g_t5;
@@ -111,6 +114,8 @@ struct Json {
 // --- the transform ---------------------------------------------------------------------------
 
 struct TransformRequest {
+    std::string adapter; float adapter_strength=1;
+    std::string adapter_pass = "both";
     std::string audio_b64;
     std::string prompt;
     float flowstep = 0.12f;
@@ -169,13 +174,18 @@ std::string run_transform(const TransformRequest& req, const std::string& sessio
         std::vector<float> latent = ac::vae_sample(encoded, frames, latent_dim, noise0);
         ac::latent_normalize(latent, frames, latent_dim, stats.mean, stats.std);
 
-        ac::DitRunner runner(dit, dc, cond, frames);
+        ac::GgufModel adapter;ac::LoraMap adapters;
+        if(!req.adapter.empty()){adapter=ac::load_gguf(g_adapters.path(req.adapter).c_str(),dit.backend);adapters=ac::load_mf_lora(dit,adapter,req.adapter_strength);}
+        ac::DitRunner runner(dit, dc, cond, frames,adapters.empty()?nullptr:&adapters);
+        std::unique_ptr<ac::DitRunner> inversion_runner;
+        if(req.adapter_pass=="generation"&&!adapters.empty())
+            inversion_runner=std::make_unique<ac::DitRunner>(dit,dc,cond,frames);
         ac::EditReport report;
         auto progress = [&session](int done, int total) {
             g_sessions.set_progress(session, done, total);
         };
         edited = ac::mf_edit_latent(runner, latent, frames, latent_dim, params, noise,
-                                    progress, report);
+                                    progress, report, inversion_runner.get());
         ac::latent_denormalize(edited, frames, latent_dim, stats.mean, stats.std);
     }
 
@@ -206,12 +216,24 @@ bool build_request(const Json& body, TransformRequest& out, std::string& error) 
         return false;
     }
     out.seed = resolve_seed(body.seed());
+    out.adapter=body.str("adapter");out.adapter_strength=(float)body.num("adapter_strength",1);
+    out.adapter_pass=body.str("adapter_pass","both");
+    if(out.adapter_pass!="both"&&out.adapter_pass!="generation"){error="adapter_pass must be both or generation";return false;}
+    if(!std::isfinite(out.adapter_strength)){error="adapter strength must be finite";return false;}
+    try {
+        if(!out.adapter.empty())g_adapters.path(out.adapter);
+        if(yyjson_is_true(yyjson_obj_get(body.root,"smart_dice"))) {
+            if(out.adapter.empty())throw std::runtime_error("smart_dice requires an adapter");
+            if(!body.str("custom_prompt").empty()||!body.str("prompt").empty())throw std::runtime_error("smart_dice and custom prompt are mutually exclusive");
+            out.prompt=ac::dice_prompt(ac::prompt_pool_path(g_adapters.path(out.adapter)),out.seed);
+        }
+    }catch(const std::exception& ex){error=ex.what();return false;}
     return true;
 }
 
 void usage() {
     fprintf(stderr,
-        "usage: melodyflow-server [--port 8002] [--models-dir DIR] [--device NAME]\n"
+        "usage: melodyflow-server [--port 8002] [--models-dir DIR] [--device NAME] [--adapters-dir DIR]\n"
         "\n"
         "Serves MelodyFlow's edit on the same routes as gary4local's melodyflow service.\n"
         "Models are found in --models-dir (or AC_MODELS_DIR): melodyflow-dit-*, \n"
@@ -235,6 +257,7 @@ int main(int argc, char** argv) {
         if (a == "--port") port = atoi(next("--port").c_str());
         else if (a == "--host") host = next("--host");
         else if (a == "--models-dir") g_models_dir = next("--models-dir");
+        else if (a == "--adapters-dir") g_adapters_dir=next("--adapters-dir");
         else if (a == "--device") g_device = next("--device");
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else { fprintf(stderr, "error: unknown argument '%s'\n", a.c_str()); usage(); return 2; }
@@ -254,7 +277,10 @@ int main(int argc, char** argv) {
             fprintf(stderr, "[ac] %s: %s\n", m.first, m.second->c_str());
     }
 
+    if(g_adapters_dir.empty())g_adapters_dir=g_models_dir+"/adapters";
+    g_adapters.discover(g_adapters_dir,"ac-melodyflow-lora");
     httplib::Server server;
+    g_adapters.routes(server);
     server.set_payload_max_length(256ull * 1024 * 1024);   // a 30 s stereo wav in base64
 
     server.Get("/health", [](const httplib::Request&, httplib::Response& res) {
@@ -349,6 +375,8 @@ int main(int argc, char** argv) {
                                 .boolean("success", true)
                                 .str("session_id", id)
                                 .num("seed", (double)tr.seed)
+                                .str("adapter", tr.adapter)
+                                .str("prompt", tr.prompt)
                                 .str("message", "Audio transform started")
                                 .str("note", "Poll /api/juce/poll_status/{session_id} for "
                                              "progress and results")

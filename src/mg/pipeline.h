@@ -64,6 +64,6 @@ std::vector<int32_t> mg_generate(const GgufModel& lm, const LmConfig& config,
                                  const TextCondition& cond,
                                  const std::vector<int32_t>& prompt_codes, int prompt_len,
                                  const GenerateParams& params, const ProgressFn& progress,
-                                 GenerateReport& report);
+                                 GenerateReport& report, const LoraMap* adapters = nullptr);
 
 } // namespace ac

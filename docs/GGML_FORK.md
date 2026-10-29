@@ -4,31 +4,12 @@
 [`betweentwomidnights/ggml`](https://github.com/betweentwomidnights/ggml), the fork shared
 with `sa3.cpp` and `acestep.cpp`.
 
-Current pin: `f30f0cdc`
-([betweentwomidnights/ggml#11](https://github.com/betweentwomidnights/ggml/pull/11)), which
-every consumer of the fork pins. It is `07f9348a`, the shared Vulkan candidate
-([#10](https://github.com/betweentwomidnights/ggml/pull/10)), plus its Metal counterpart. Both
-sit on `fff93d27`, the earlier tip of `feature/shared-sa3-acestep-v0.17`. That tip is
-`19c5421c` (upstream ggml `v0.17.0` plus the fork's patch stack), with the two CUDA commits from
-betweentwomidnights/ggml#6 on top: the TF32 opt-out below, and a contiguity check for the
-transposed copy (see [MUSICGEN_LM.md](MUSICGEN_LM.md)).
-
-#10 merges three Vulkan fixes and adds tests:
-
-- #7: `GGML_PREC_F32` keeps an F32 x F32 matmul's operands in fp32. Without it, Vulkan rounds
-  them to fp16.
-- #8: the batch stride of an in-place matmul src comes from `nb[2]`. This is the KV-cache bug
-  that `tests/kv_attention_test.cpp` pins.
-- #9: a Vulkan `PAD_REFLECT_1D` kernel. Without it, SEANet produced noise on Vulkan.
-
-#11 does the same for Metal:
-
-- `GGML_PREC_F32` on an F32 x F32 `mul_mm` stages its operands as `float` instead of `half`.
-- A partial-simdgroup fix for NORM/RMS_NORM, cherry-picked from upstream.
-
-On Vulkan, these bring the MelodyFlow VAE and EnCodec to cossim 1.0000000 against torch, and
-greedy MusicGen to 100% of tokens. On an Apple M4, measured against the same machine's CPU, the
-VAE latent goes from 77.3 to 118.1 dB, and EnCodec codes go from 1999/2000 to 2000/2000.
+Current pin: `60f49e09ce67df544831a357b654318ec2722fb0`, published on
+`feature/shared-sa3-acestep-v0.17` and also used by the local `sa3.cpp` checkout.
+This advances the previous `fff93d27` pin with upstream correctness backports,
+Metal F32 accumulation and normalization fixes, CUDA reduction-buffer and flash
+attention fixes, Vulkan view-alias synchronization, and BF16 frozen-weight
+`OUT_PROD` backward support. The CUDA TF32 opt-out below is retained.
 
 The rest of the fork's patch stack — CPU/CUDA/Vulkan/Metal autodiff and backend work, the Q4_K_M
 `get_rows` fix, the wide-row `SET` fix, quantized-`src0` `OUT_PROD` — is documented in
@@ -47,7 +28,7 @@ upstream bump could disturb:
 | `ggml_rope_ext` (NeoX) | MelodyFlow DiT positional embedding |
 | `ggml_flash_attn_ext` | optional attention path (`AC_FLASH_ATTN`) |
 
-## CUDA: opting out of TF32 for F32 matmuls
+## Retained patch: opting out of TF32 for F32 matmuls on CUDA
 
 `ggml_backend_cuda_context::cublas_handle` creates its cuBLAS handle with
 
@@ -136,32 +117,6 @@ not. A `ggml_backend_cuda_set_tf32()` or a `supports_op`-visible flag would be a
 answer than an environment variable; the variable is what fits in one line without adding
 public API surface to a fork.
 
-### Before this pin is published
-
-Per the pin policy below, and because the branch changes CUDA numerics for everyone who
-takes it:
-
-1. Build `sa3.cpp` and `acestep.cpp` against this branch on CUDA.
-2. Confirm their outputs are unchanged with `GGML_CUDA_TF32` unset — that is the whole point
-   of leaving the default alone, and it is the regression test.
-3. Optionally measure what they gain from `GGML_CUDA_TF32=0`; both have convolutional
-   decoders, so `sa3.cpp`'s Oobleck is a plausible beneficiary.
-4. Then push the branch and record the pin here.
-
-## Vulkan: strided batches in mul_mat
-
-Backport of upstream
-[ggml-org/llama.cpp#28956](https://github.com/ggml-org/llama.cpp/pull/28956). The Vulkan
-backend read a row-contiguous view with strided batches in place, but passed a packed batch
-stride (`ne00*ne01`). The KV cache's K history is exactly that view, so on Vulkan every
-attention head past the first read the wrong keys. `kv_attention` failed on Vulkan, and
-greedy MusicGen matched torch on 0.02% of tokens. With the fix it matches on 100%. The
-details are in [MUSICGEN_LM.md](MUSICGEN_LM.md); the fork-side numbers and
-`test-backend-ops` cases are in betweentwomidnights/ggml#8.
-
-It changes no result that was right before: a contiguous tensor gets the same stride as
-before, and only views like this one move.
-
 ## Pin policy
 
 Same policy as `sa3.cpp`, and for the same reason:
@@ -188,28 +143,20 @@ git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
-## Where this branch sits
+## Training graph constraints
 
-```
-19c5421c   sa3.cpp's pin, upstream v0.17.0 + the fork's patch stack
-  |
-  +-- de8870f4   cuda : allow opting out of TF32 for F32 matmuls
-  +-- fff93d27   cuda : require a contiguous destination for the transposed copy
-  |              (tip of feature/shared-sa3-acestep-v0.17, via #6)
-  |
-  +-- 217f0f2d   vulkan : honor GGML_PREC_F32 for f32 x f32 mul_mat (#7)
-  +-- d6e6604f   vulkan : read the batch stride of an in place mul_mat src from nb[2] (#8)
-  +-- 5cb55640   tests : SEANet-shaped PAD_REFLECT_1D cases (#9, on d12e8055)
-  +-- 07f9348a   tests : MUL_MAT cases with GGML_PREC_F32 (shared Vulkan candidate, #10)
-  +-- 3163749a   metal : fix NORM/RMS_NORM for row lengths that leave a partial simdgroup
-  +-- c4146532   metal : honor GGML_PREC_F32 for f32 x f32 mul_mm
-  +-- f30f0cdc   tests : keep the default MUL_MAT prec=f32 bound on CUDA while TF32 is on
-                 (#11)   <- audiocraft.cpp pins this
-```
+The fork provides the backward primitives, but a complete model still needs gradient
+validation. MelodyFlow's experimental trainer uses a differentiable LayerNorm
+(SUM_ROWS, SCALE, centering, RMSNorm) and an erf approximation built from elementary
+ops because NORM and GELU_ERF have no autodiff rules. MEAN backward assumes a scalar,
+so SUM_ROWS is necessary for a multi-token input.
 
-Read the pin from a checkout rather than trusting this file:
+CONCAT backward assumes a contiguous fastest dimension. V's attention transpose
+produces a strided incoming gradient; a training-only CONT before that transpose
+restores the layout before it reaches CONCAT. The DiT's final scaling is also moved
+after its output transpose in training to satisfy SCALE backward's layout contract.
+These changes leave the inference operation path intact. The complete tiny-DiT test
+checks finite differences through fused QKV, attention, stored-frequency RoPE, and
+U-ViT skips; a decreasing training loss alone is insufficient validation.
 
-```bash
-git -C ggml rev-parse HEAD          # f30f0cdc...
-git -C ggml log --oneline 19c5421c..HEAD
-```
+See [MELODYFLOW_LORA.md](MELODYFLOW_LORA.md) for the experimental CLI and limitations.
