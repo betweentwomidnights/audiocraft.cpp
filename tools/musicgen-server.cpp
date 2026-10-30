@@ -22,6 +22,7 @@
 #include "mg/pipeline.h"
 #include "serve/http.h"
 #include "serve/adapters.h"
+#include "serve/runtime.h"
 
 #include "httplib.h"
 #include "yyjson.h"
@@ -324,7 +325,7 @@ void start_generation(GenerateRequest req, const char* started_message,
 
 void usage() {
     fprintf(stderr,
-        "usage: musicgen-server [--port 8000] [--models-dir DIR] [--device NAME] [--adapters-dir DIR]\n"
+        "usage: musicgen-server [--version|--props] [--port 8000] [--models-dir DIR] [--device NAME] [--adapters-dir DIR]\n"
         "\n"
         "Serves MusicGen continuation on the same routes as gary4local's gary service.\n"
         "Every musicgen-*.gguf in --models-dir (or AC_MODELS_DIR) is offered by\n"
@@ -334,8 +335,11 @@ void usage() {
 } // namespace
 
 int main(int argc, char** argv) {
-    int port = 8000;
-    std::string host = "127.0.0.1";
+    const int probe = ac::serve::runtime_probe(argc, argv, "musicgen");
+    if (probe >= 0) return probe;
+    int port = ac::serve::runtime_port("AC_MUSICGEN_PORT", 8000);
+    std::string host = env_or("AC_HOST", "127.0.0.1");
+    g_adapters_dir = env_or("AC_ADAPTERS_DIR", "");
     g_models_dir = env_or("AC_MODELS_DIR", "models");
     g_device = env_or("AC_DEVICE", "");
 

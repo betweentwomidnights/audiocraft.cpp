@@ -46,6 +46,12 @@ void save(const std::filesystem::path& path, const ac::GgufModel& cache,
 }
 }
 int main(int argc, char** argv) {
+    if (argc == 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
+        fprintf(stderr, "usage: mf-edit-cache --mode prepare|render --dit MODEL --cache ROOT|FILE --out ROOT|F32\n"
+                        "  --frames 750 --device cpu|gpu --flowstep 0.11 --seed 1234\n"
+                        "  --windows-per-source N --flowsteps 0.03,0.11 --cfg-coef 4 --lora ADAPTER\n");
+        return 0;
+    }
     try {
         std::string dit, cache_path, out, lora, device = "cpu", mode;
         int frames = 750, windows_per_source = 1; uint32_t seed = 1234; float start = 0.11f, cfg = 4;

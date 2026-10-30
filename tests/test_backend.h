@@ -49,6 +49,9 @@ inline const std::vector<AcTestBackend>& ac_test_backends() {
         std::vector<AcTestBackend> out;
         for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            const char* selection = std::getenv("AC_TEST_DEVICE");
+            if (selection && std::strcmp(selection, "cpu") == 0 &&
+                ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) continue;
             if (!ac_test_is_model_hostable(dev)) continue;
             if (ggml_backend_t b = ggml_backend_dev_init(dev, nullptr))
                 out.push_back({ ggml_backend_dev_name(dev), b });

@@ -21,3 +21,6 @@ models/
 
 # local audio fixtures (bring your own; see docs/MELODYFLOW_VAE.md)
 testdata/
+
+/dist/
+/dist-*/

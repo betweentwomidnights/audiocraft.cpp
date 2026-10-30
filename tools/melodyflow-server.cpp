@@ -24,6 +24,7 @@
 #include "rng.h"
 #include "serve/http.h"
 #include "serve/adapters.h"
+#include "serve/runtime.h"
 
 #include "httplib.h"
 #include "yyjson.h"
@@ -233,7 +234,7 @@ bool build_request(const Json& body, TransformRequest& out, std::string& error) 
 
 void usage() {
     fprintf(stderr,
-        "usage: melodyflow-server [--port 8002] [--models-dir DIR] [--device NAME] [--adapters-dir DIR]\n"
+        "usage: melodyflow-server [--version|--props] [--port 8002] [--models-dir DIR] [--device NAME] [--adapters-dir DIR]\n"
         "\n"
         "Serves MelodyFlow's edit on the same routes as gary4local's melodyflow service.\n"
         "Models are found in --models-dir (or AC_MODELS_DIR): melodyflow-dit-*, \n"
@@ -243,8 +244,11 @@ void usage() {
 } // namespace
 
 int main(int argc, char** argv) {
-    int port = 8002;
-    std::string host = "127.0.0.1";
+    const int probe = ac::serve::runtime_probe(argc, argv, "melodyflow");
+    if (probe >= 0) return probe;
+    int port = ac::serve::runtime_port("AC_MELODYFLOW_PORT", 8002);
+    std::string host = env_or("AC_HOST", "127.0.0.1");
+    g_adapters_dir = env_or("AC_ADAPTERS_DIR", "");
     g_models_dir = env_or("AC_MODELS_DIR", "models");
     g_device = env_or("AC_DEVICE", "");
 
