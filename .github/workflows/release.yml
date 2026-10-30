@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   windows:
-    name: windows-x64 (cpu + cuda + vulkan)
+    name: windows-x64 packages
     # Pinned rather than windows-latest: the CUDA toolkit's MSBuild integration
     # targets Visual Studio 2022, and ci/package-windows.ps1 asks for that
     # generator by name. A runner image moving to a newer Visual Studio should

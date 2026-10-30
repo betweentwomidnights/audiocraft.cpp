@@ -195,6 +195,10 @@ endif()
 
 # --- tests -----------------------------------------------------------------
 if(BUILD_TESTING AND AC_BUILD_TOOLS)
+    add_executable(device_selection_test tests/device_selection_test.cpp)
+    target_link_libraries(device_selection_test PRIVATE ac)
+    add_test(NAME device_selection COMMAND device_selection_test)
+    set_tests_properties(device_selection PROPERTIES LABELS "non-gpu;shared")
     add_executable(prompt_file_test tests/prompt_file_test.cpp)
     target_link_libraries(prompt_file_test PRIVATE ac)
     add_test(NAME prompt_file COMMAND prompt_file_test)

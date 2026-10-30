@@ -36,7 +36,7 @@ The `service` values are `musicgen` and `melodyflow`, while the bundle identity 
 | --- | --- |
 | AC_MODELS_DIR | GGUF model directory, default `models` |
 | AC_DEVICE | Requested backend/device, e.g. cpu, cuda or vulkan |
-| AC_GPU | GPU index or description filter, e.g. nvidia |
+| AC_GPU | Index within the selected backend or description filter, e.g. nvidia |
 | AC_HOST | Listen address, default 127.0.0.1 |
 | AC_PORT | Port for a single supervised process |
 | AC_MUSICGEN_PORT / AC_MELODYFLOW_PORT | Per-service overrides of AC_PORT; defaults 8000/8002 |
