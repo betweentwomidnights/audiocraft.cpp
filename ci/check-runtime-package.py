@@ -12,6 +12,7 @@ def main():
     p.add_argument('directory', type=Path)
     p.add_argument('version')
     p.add_argument('--arch', choices=['arm64', 'x86_64'])
+    p.add_argument('--standalone', action='store_true')
     args = p.parse_args()
     directory = args.directory.resolve()
     version = args.version.removeprefix('v')
@@ -51,8 +52,9 @@ def main():
     assert info['commit'] and info['ggml_commit']
     if info['platform'] == 'windows-x64':
         assert info['build_flavor'] in ['portable','cpu-smoke','gpu-smoke']
-        assert not (directory/'ggml-cuda.dll').exists(), 'GPU backend leaked into core'
-        assert not (directory/'ggml-vulkan.dll').exists(), 'GPU backend leaked into core'
+        if not args.standalone:
+            assert not (directory/'ggml-cuda.dll').exists(), 'GPU backend leaked into core'
+            assert not (directory/'ggml-vulkan.dll').exists(), 'GPU backend leaked into core'
     print('PASS staged MusicGen/MelodyFlow versions, CPU devices, metadata and CLI startup')
 
 

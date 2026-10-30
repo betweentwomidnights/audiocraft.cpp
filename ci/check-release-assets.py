@@ -44,10 +44,16 @@ def main():
                     assert names == ['ggml-cuda.dll']
                 elif windows and name == prefix+'-vulkan.zip':
                     assert names == ['ggml-vulkan.dll']
-                elif name in [prefix+'-core.zip', prefix+'.zip']:
+                elif name in [prefix+'-core.zip', prefix+'.zip', prefix+'-standalone.zip']:
                     assert 'BUILD-INFO.json' in names
-                    assert not any(n in names for n in ['ggml-cuda.dll','ggml-vulkan.dll'])
-                    stage = Path(temp)/'runtime';stage.mkdir()
+                    standalone = name == prefix+'-standalone.zip'
+                    if standalone:
+                        assert {'musicgen-server.exe','melodyflow-server.exe','ggml-cuda.dll',
+                                'ggml-vulkan.dll','cudart64_12.dll','cublas64_12.dll',
+                                'cublasLt64_12.dll','NVIDIA-CUDA-EULA.txt','README.txt'} <= set(names)
+                    else:
+                        assert not any(n in names for n in ['ggml-cuda.dll','ggml-vulkan.dll'])
+                    stage = Path(temp)/('standalone' if standalone else 'runtime');stage.mkdir()
                     z.extractall(stage)
                     if not windows:
                         for info in z.infolist():
@@ -56,6 +62,7 @@ def main():
                     for arch in ([None] if windows else ['arm64','x86_64']):
                         cmd = [sys.executable,str(checker),str(stage),a.version]
                         if arch: cmd += ['--arch',arch]
+                        if standalone: cmd += ['--standalone']
                         subprocess.run(cmd,check=True)
                     if not windows:
                         for file in stage.iterdir():
