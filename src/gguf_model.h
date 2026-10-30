@@ -1,5 +1,5 @@
 // Ported from sa3.cpp src/gguf_model.h (namespace sa3 -> ac, SA3_* env vars -> AC_*).
-// gguf_model.h — minimal, model-agnostic GGUF weight loader for GGML.
+// gguf_model.h â€” minimal, model-agnostic GGUF weight loader for GGML.
 // Loads every tensor in a .gguf into a backend buffer and exposes lookups by
 // name plus typed metadata accessors. Reusable by any GGML port.
 #pragma once
@@ -106,7 +106,7 @@ inline void configure_cpu_threads(ggml_backend_t b, int n_threads) {
 
 // Pick the compute backend: a registered GPU/iGPU device (CUDA when the CUDA backend is
 // linked) unless AC_DEVICE=cpu forces CPU. In a CPU-only build the registry has no
-// GPU/iGPU device, so this transparently returns the CPU backend — same code, both builds.
+// GPU/iGPU device, so this transparently returns the CPU backend â€” same code, both builds.
 //
 // Device choice among GPUs: the Vulkan backend registers EVERY Vulkan device, so on a
 // laptop with an Intel iGPU + a discrete NVIDIA GPU the first-by-type device may be the
@@ -117,7 +117,8 @@ inline void configure_cpu_threads(ggml_backend_t b, int n_threads) {
 // (e.g. AC_GPU=nvidia). CUDA builds expose a single GPU device, so this is a no-op there.
 // device: explicit device request from the API (nullptr/empty falls back to the
 // AC_DEVICE env var, so CLI usage is unchanged). "cpu" forces the CPU backend;
-// anything else selects a GPU (optionally narrowed by AC_GPU) with CPU fallback.
+// gpu/auto selects any GPU; a backend/device name restricts candidates.
+// AC_GPU then narrows that list; CPU remains the fallback when no GPU can initialize.
 // Choose full F32 accumulation over TF32 for CUDA matmuls, unless asked otherwise.
 //
 // ggml creates its cuBLAS handle with CUBLAS_TF32_TENSOR_OP_MATH, which computes every F32
@@ -144,6 +145,13 @@ inline void prefer_f32_matmuls_once() {
     (void)done;
 }
 
+inline bool device_request_matches(std::string request, std::string registry, std::string name) {
+    for (auto* value : {&request, &registry, &name})
+        for (char& c : *value) c = (char)std::tolower((unsigned char)c);
+    return request.empty() || request == "gpu" || request == "auto" ||
+           request == registry || request == name;
+}
+
 inline ggml_backend_t make_backend(int cpu_threads = 0, const char* device = nullptr) {
     // Must happen before the first matmul: ggml reads this when it lazily creates the
     // cuBLAS handle, and the handle's math mode is fixed for the life of the process.
@@ -151,6 +159,7 @@ inline ggml_backend_t make_backend(int cpu_threads = 0, const char* device = nul
     load_dynamic_backends_once();
     std::string dev_str = (device && *device) ? device : "";
     if (dev_str.empty()) { const char* e = getenv("AC_DEVICE"); if (e) dev_str = e; }
+    for (char& c : dev_str) c = (char)std::tolower((unsigned char)c);
     const char* dev = dev_str.empty() ? nullptr : dev_str.c_str();
     if (!(dev && strcmp(dev, "cpu") == 0)) {
         // Collect all GPU/iGPU devices in registry order.
@@ -158,7 +167,9 @@ inline ggml_backend_t make_backend(int cpu_threads = 0, const char* device = nul
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t d = ggml_backend_dev_get(i);
             const enum ggml_backend_dev_type type = ggml_backend_dev_type(d);
-            if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU)
+            if ((type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) &&
+                device_request_matches(dev_str,
+                    ggml_backend_reg_name(ggml_backend_dev_backend_reg(d)), ggml_backend_dev_name(d)))
                 gpus.push_back(d);
         }
         if (!gpus.empty()) {

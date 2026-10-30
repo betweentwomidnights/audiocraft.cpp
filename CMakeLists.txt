@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(audiocraft_cpp LANGUAGES C CXX)
+project(audiocraft_cpp VERSION 0.1.0 LANGUAGES C CXX)
 
 include(CTest)
 
@@ -113,6 +113,7 @@ add_subdirectory(ggml)
 
 # src/ is header-driven; families add their own STATIC libraries below.
 add_library(ac INTERFACE)
+target_compile_definitions(ac INTERFACE AC_VERSION="${PROJECT_VERSION}")
 add_library(ac_json STATIC vendor/yyjson/yyjson.c)
 target_include_directories(ac_json PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/vendor/yyjson)
 target_include_directories(ac INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -194,6 +195,10 @@ endif()
 
 # --- tests -----------------------------------------------------------------
 if(BUILD_TESTING AND AC_BUILD_TOOLS)
+    add_executable(device_selection_test tests/device_selection_test.cpp)
+    target_link_libraries(device_selection_test PRIVATE ac)
+    add_test(NAME device_selection COMMAND device_selection_test)
+    set_tests_properties(device_selection PROPERTIES LABELS "non-gpu;shared")
     add_executable(prompt_file_test tests/prompt_file_test.cpp)
     target_link_libraries(prompt_file_test PRIVATE ac)
     add_test(NAME prompt_file COMMAND prompt_file_test)
@@ -303,18 +308,26 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
     set_tests_properties(t5_bucket PROPERTIES LABELS "non-gpu;shared")
 
     if(AC_PYTHON)
+        if(AC_BUILD_MUSICGEN AND AC_BUILD_MELODYFLOW)
+            add_test(NAME runtime_probe COMMAND ${AC_PYTHON}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_probe_test.py ${PROJECT_VERSION}
+                $<TARGET_FILE:musicgen-server> $<TARGET_FILE:melodyflow-server>)
+            set_tests_properties(runtime_probe PROPERTIES LABELS "non-gpu;shared;tooling")
+        endif()
         add_test(NAME train_cache_windows
                  COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/train_cache_windows_test.py)
         set_tests_properties(train_cache_windows PROPERTIES LABELS "non-gpu;shared;training;tooling")
         if(AC_BUILD_MUSICGEN)
             add_test(NAME mg_train_cli
                      COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/mg_train_cli_test.py $<TARGET_FILE:mg-train>)
-            set_tests_properties(mg_train_cli PROPERTIES LABELS "non-gpu;musicgen;training;tooling")
+            set_tests_properties(mg_train_cli PROPERTIES LABELS "non-gpu;musicgen;training;tooling"
+                ENVIRONMENT "AC_THREADS=1")
         endif()
         if(AC_BUILD_MELODYFLOW)
             add_test(NAME mf_train_cli
                      COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/mf_train_cli_test.py $<TARGET_FILE:mf-train> $<TARGET_FILE:mf-edit-cache>)
-            set_tests_properties(mf_train_cli PROPERTIES LABELS "non-gpu;melodyflow;training;tooling")
+            set_tests_properties(mf_train_cli PROPERTIES LABELS "non-gpu;melodyflow;training;tooling"
+                ENVIRONMENT "AC_THREADS=1")
         endif()
         add_test(NAME t5_converter
                  COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/t5_converter_test.py)
