@@ -320,12 +320,14 @@ if(BUILD_TESTING AND AC_BUILD_TOOLS)
         if(AC_BUILD_MUSICGEN)
             add_test(NAME mg_train_cli
                      COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/mg_train_cli_test.py $<TARGET_FILE:mg-train>)
-            set_tests_properties(mg_train_cli PROPERTIES LABELS "non-gpu;musicgen;training;tooling")
+            set_tests_properties(mg_train_cli PROPERTIES LABELS "non-gpu;musicgen;training;tooling"
+                ENVIRONMENT "AC_THREADS=1")
         endif()
         if(AC_BUILD_MELODYFLOW)
             add_test(NAME mf_train_cli
                      COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/mf_train_cli_test.py $<TARGET_FILE:mf-train> $<TARGET_FILE:mf-edit-cache>)
-            set_tests_properties(mf_train_cli PROPERTIES LABELS "non-gpu;melodyflow;training;tooling")
+            set_tests_properties(mf_train_cli PROPERTIES LABELS "non-gpu;melodyflow;training;tooling"
+                ENVIRONMENT "AC_THREADS=1")
         endif()
         add_test(NAME t5_converter
                  COMMAND ${AC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tests/t5_converter_test.py)
