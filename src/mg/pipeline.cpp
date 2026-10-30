@@ -36,11 +36,11 @@ double now_s() {
 class Decoder {
 public:
     Decoder(const GgufModel& lm, const LmConfig& c, int capacity, int n_seq,
-            const TextCondition& cond, bool cross_attention)
-        : lm_(lm), c_(c), n_seq_(n_seq), cross_(cross_attention),
+            const TextCondition& cond, bool cross_attention, const LoraMap* adapters)
+        : lm_(lm), c_(c), adapters_(adapters), n_seq_(n_seq), cross_(cross_attention),
           cache_(lm.backend, c.layers, c.head_dim, c.heads, capacity, n_seq) {
-        arena_.resize(ggml_tensor_overhead() * lm_graph_nodes(c) * 2 +
-                      ggml_graph_overhead_custom(lm_graph_nodes(c), false) + (1u << 20));
+        arena_.resize(ggml_tensor_overhead() * graph_nodes() * 2 +
+                      ggml_graph_overhead_custom(graph_nodes(), false) + (1u << 20));
         alloc_ = ggml_gallocr_new(ggml_backend_get_default_buffer_type(lm.backend));
         if (!alloc_) throw std::runtime_error("failed to create the LM graph allocator");
         if (cross_) project_context(cond);
@@ -87,9 +87,9 @@ public:
 
         std::vector<ggml_tensor*> writes;
         ggml_tensor* logits = lm_forward(ctx, lm_, ids_t, pos_t, ctx_t, mask_t, cache_,
-                                         n_tokens, writes, c_);
+                                         n_tokens, writes, c_, adapters_);
         ggml_set_output(logits);
-        ggml_cgraph* graph = ggml_new_graph_custom(ctx, lm_graph_nodes(c_), false);
+        ggml_cgraph* graph = ggml_new_graph_custom(ctx, graph_nodes(), false);
         // The cache writes are side effects: nothing downstream reads their results, so
         // without expanding them explicitly ggml would prune them and the history would
         // never be written.
@@ -179,7 +179,9 @@ private:
         if (!ok) throw std::runtime_error(error);
     }
 
+    size_t graph_nodes() const { return lm_graph_nodes(c_) + (adapters_ ? adapters_->size()*64 : 0); }
     const GgufModel& lm_;
+    const LoraMap* adapters_;
     LmConfig c_;
     int n_seq_ = 1;
     bool cross_ = true;
@@ -198,7 +200,7 @@ std::vector<int32_t> mg_generate(const GgufModel& lm, const LmConfig& c,
                                  const TextCondition& cond,
                                  const std::vector<int32_t>& prompt_codes, int prompt_len,
                                  const GenerateParams& params, const ProgressFn& progress,
-                                 GenerateReport& report) {
+                                 GenerateReport& report, const LoraMap* adapters) {
     const int K = c.n_q, T = params.max_gen_len;
     if (T <= 0) throw std::runtime_error("max_gen_len must be positive");
     if (prompt_len < 0 || prompt_len >= T)
@@ -237,7 +239,7 @@ std::vector<int32_t> mg_generate(const GgufModel& lm, const LmConfig& c,
     // cross-attention can be skipped outright: the null source is all zeros and the
     // attention projections have no biases, so those blocks contribute exactly nothing.
     const int n_seq = guided ? 2 : 1;
-    Decoder decoder(lm, c, S, n_seq, cond, /*cross_attention=*/guided);
+    Decoder decoder(lm, c, S, n_seq, cond, /*cross_attention=*/guided, adapters);
 
     Rng rng(params.seed);
     std::vector<float> scratch;

@@ -15,6 +15,8 @@
 // stream and `--noise` replays one, which is how a run is compared against torch: seeds do
 // not carry across frameworks, so the noise is made an input instead of a parameter.
 #include "gguf_model.h"
+#include "ac/prompt_pool.h"
+#include "ac/prompt_file.h"
 #include "mf/pipeline.h"
 #include "mf/vae.h"
 #include "rng.h"
@@ -96,6 +98,11 @@ void usage() {
         "usage: mf-edit --dit <dit.gguf> --codec <codec.gguf> --t5 <t5.gguf>\n"
         "               --input <in.wav> --prompt <text> --out <out.wav> [options]\n"
         "\n"
+        "  --prompt-file <path>     UTF-8 caption, avoids Windows argv conversion\n"
+        "  --smart-dice --prompt-pool <json> seeded training caption (pool defaults beside adapter)\n"
+        "  --lora <adapter.gguf>     experimental MelodyFlow LoRA\n"
+        "  --lora-strength <f>       adapter multiplier (default 1)\n"
+        "  --lora-pass both|generation  passes using the adapter (default both)\n"
         "  --solver euler|midpoint  ODE solver (default euler)\n"
         "  --steps <n>              solver steps (default 25 euler, 64 midpoint)\n"
         "  --flowstep <f>           the pivot the inversion runs down to (default 0.12)\n"
@@ -117,6 +124,9 @@ void usage() {
 } // namespace
 
 int main(int argc, char** argv) {
+    std::string lora_path, pool_path; bool smart_dice=false;
+    std::string lora_pass = "both";
+    float lora_strength = 1.0f;
     std::string dit_path, codec_path, t5_path, in_path, out_path, device, prompt;
     std::string noise_in, noise_out, out_prompt_latent, out_intermediate, out_latent;
     std::string solver = "euler";
@@ -133,11 +143,32 @@ int main(int argc, char** argv) {
             if (i + 1 >= argc) { fprintf(stderr, "error: %s needs a value\n", what); exit(2); }
             return argv[++i];
         };
-        if (a == "--dit") dit_path = next("--dit");
+        if (a == "--smart-dice") smart_dice=true;
+        else if (a == "--prompt-pool") pool_path=next("--prompt-pool");
+        else if (a == "--lora") lora_path = next("--lora");
+        else if (a == "--lora-pass") {
+            lora_pass = next("--lora-pass");
+            if (lora_pass != "both" && lora_pass != "generation") {
+                fprintf(stderr, "error: --lora-pass must be both or generation\n"); return 2;
+            }
+        }
+        else if (a == "--lora-strength") {
+            const auto value = next("--lora-strength");
+            char* end = nullptr;
+            lora_strength = std::strtof(value.c_str(), &end);
+            if (end == value.c_str() || *end || !std::isfinite(lora_strength)) {
+                fprintf(stderr, "error: --lora-strength needs a finite number\n"); return 2;
+            }
+        }
+        else if (a == "--dit") dit_path = next("--dit");
         else if (a == "--codec") codec_path = next("--codec");
         else if (a == "--t5") t5_path = next("--t5");
         else if (a == "--input") in_path = next("--input");
         else if (a == "--prompt") prompt = next("--prompt");
+        else if (a == "--prompt-file") {
+            try { prompt = ac::read_prompt_file(next("--prompt-file")); }
+            catch (const std::exception& e) { fprintf(stderr,"error: %s\n",e.what()); return 2; }
+        }
         else if (a == "--out") out_path = next("--out");
         else if (a == "--solver") solver = next("--solver");
         else if (a == "--steps") steps = atoi(next("--steps").c_str());
@@ -168,6 +199,11 @@ int main(int argc, char** argv) {
     }
 
     try {
+        if(smart_dice) {
+            if(!prompt.empty()) throw std::runtime_error("--smart-dice and --prompt are mutually exclusive");
+            if(pool_path.empty()) {if(lora_path.empty())throw std::runtime_error("smart dice needs an adapter or prompt pool");pool_path=ac::prompt_pool_path(lora_path);}
+            prompt=ac::dice_prompt(pool_path,seed);
+        }
         ac::EditParams params;
         params.solver = ac::parse_flow_solver(solver);
         // terry overrides both of these together when the request asks for midpoint.
@@ -229,6 +265,12 @@ int main(int argc, char** argv) {
             ac::GgufModel dit = ac::load_gguf(
                 dit_path.c_str(), ac::make_backend(0, device.empty() ? nullptr : device.c_str()));
             const ac::DitConfig dc = ac::DitConfig::from(dit);
+            ac::GgufModel adapter;
+            ac::LoraMap adapters;
+            if (!lora_path.empty()) {
+                adapter = ac::load_gguf(lora_path.c_str(), dit.backend);
+                adapters = ac::load_mf_lora(dit, adapter, lora_strength);
+            }
             if (dc.latent_dim != latent_dim)
                 throw std::runtime_error("the DiT and the codec disagree about latent_dim");
             if (frames > (int)std::lround((double)dc.max_duration * frame_rate))
@@ -249,7 +291,12 @@ int main(int argc, char** argv) {
                     params.regularize ? "regularized" : "no regularization",
                     ac::edit_forward_count(params));
 
-            ac::DitRunner runner(dit, dc, cond, frames);
+            ac::DitRunner runner(dit, dc, cond, frames, &adapters);
+            std::unique_ptr<ac::DitRunner> inversion_runner;
+            if (lora_pass == "generation" && !adapters.empty())
+                inversion_runner = std::make_unique<ac::DitRunner>(dit, dc, cond, frames);
+            if (!adapters.empty())
+                fprintf(stderr, "[ac] LoRA: strength %.3f, %s pass(es)\n", lora_strength, lora_pass.c_str());
             int last = -1;
             auto progress = [&last](int done, int total) {
                 const int pct = total > 0 ? done * 100 / total : 0;
@@ -259,7 +306,7 @@ int main(int argc, char** argv) {
                 fflush(stderr);
             };
             edited = ac::mf_edit_latent(runner, latent, frames, latent_dim, params,
-                                        std::ref(noise), progress, report);
+                                        std::ref(noise), progress, report, inversion_runner.get());
             fprintf(stderr, "\r[ac] inversion %d forward(s) in %.2fs, generation %d in %.2fs\n",
                     report.inversion_forwards, report.inversion_seconds,
                     report.generation_forwards, report.generation_seconds);

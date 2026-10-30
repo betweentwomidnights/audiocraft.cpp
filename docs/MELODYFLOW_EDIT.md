@@ -159,6 +159,28 @@ smallest thing that can disagree, so start there — `--trace-forwards` on the d
 the input, flow step and output of the first N DiT calls, and `ac-dit` can be pointed at
 exactly those.
 
+## Installed Gary4Local sanity check, 2026-10-05
+
+The first 30 seconds of `kk_10_25_arms_folded.mp3` were edited through the
+installed `Gary4JUCE/services/melodyflow/localhost_melodyflow.py::process_audio`
+using PyTorch 2.7.1+cu128 on CUDA. The unchanged dataset caption was
+`Electronic, Chiptune, Goa Trance, Trance. melodic, energetic, dark, space, retro, game. 144 bpm. Key of E.`
+Settings were Euler/25, pivot 0.13, regularization 2/1, KL 0.2, guidance 4 and
+seed 1234. The script recorded the service's actual 51 noise draws without
+changing them; native edits then replayed those exact values.
+
+Against that CUDA BF16 reference, native F16 audio waveform cosine was 0.9805217,
+RMS-envelope cosine 0.9957306 and log-spectrum cosine 0.9932307. Native F32 audio
+waveform cosine was 0.9766097. These comparisons retain a precision mismatch and
+are not strict F32 parity gates. In a separate 750-frame conditional DiT forward
+at t=0.37, native F32 and installed PyTorch CPU F32 matched to 8.94e-6 relative
+L2 error (cosine 0.99999999996). The listener accepted the outputs as sufficiently
+similar; the subsequent full CPU F32 edit was stopped at the user's request.
+
+Audio, settings, noise and measurements are in
+`build-cuda/arms-folded-lora/pytorch-gary/`. This check covers base inference,
+not whether an adapter has learned a useful musical transformation.
+
 ## Speed
 
 30 s window, 125 DiT forwards, RTX 5070 Laptop 8 GB. Solve only; model loading excluded.

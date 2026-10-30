@@ -64,7 +64,7 @@ struct DitRunner::Impl {
 };
 
 DitRunner::DitRunner(const GgufModel& dit, const DitConfig& config, const TextCondition& cond,
-                     int frames)
+                     int frames, const LoraMap* adapters)
     : impl_(new Impl(dit, config)) {
     Impl& s = *impl_;
     s.frames = frames;
@@ -86,9 +86,11 @@ DitRunner::DitRunner(const GgufModel& dit, const DitConfig& config, const TextCo
         ggml_set_input(t);
 
     s.velocity_t = ggml_cont(s.ctx, dit_forward(s.ctx, dit, s.latent_t, s.rescale_t, s.tfeat_t,
-                                                s.cond_t, s.pos_t, s.mask_t, config));
+                                                s.cond_t, s.pos_t, s.mask_t, config, adapters));
     ggml_set_output(s.velocity_t);
-    s.graph = ggml_new_graph_custom(s.ctx, dit_graph_nodes(config), false);
+    // Functional adapter branches (especially DoRA row norms) add nodes beyond
+    // the base graph's bound. Reserve them before expanding, including leaves.
+    s.graph = ggml_new_graph_custom(s.ctx, dit_graph_nodes(config) + (adapters ? adapters->size()*64 : 0), false);
     ggml_build_forward_expand(s.graph, s.velocity_t);
     dit_set_matmul_precision(s.graph);
     s.alloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(dit.backend));
@@ -162,7 +164,8 @@ VelocityFn DitRunner::guided(float cfg_coef) {
 std::vector<float> mf_edit_latent(DitRunner& dit, const std::vector<float>& prompt_latent,
                                   int frames, int latent_dim, const EditParams& params,
                                   const NoiseFn& noise, const ProgressFn& progress,
-                                  EditReport& report) {
+                                  EditReport& report, DitRunner* inversion_dit) {
+    DitRunner& inverse = inversion_dit ? *inversion_dit : dit;
     const FlowParams inversion = edit_inversion_params(params);
     const FlowParams generation = edit_generation_params(params);
 
@@ -180,12 +183,12 @@ std::vector<float> mf_edit_latent(DitRunner& dit, const std::vector<float>& prom
     }
 
     double t0 = now_s();
-    int before = dit.forwards();
+    int before = inverse.forwards();
     const std::vector<float> intermediate =
         flow_solve(inversion, prompt_latent, latent_dim, frames,
-                   dit.guided(inversion.effective_cfg_coef()), noise, inversion_progress);
+                   inverse.guided(inversion.effective_cfg_coef()), noise, inversion_progress);
     report.inversion_seconds = now_s() - t0;
-    report.inversion_forwards = dit.forwards() - before;
+    report.inversion_forwards = inverse.forwards() - before;
 
     t0 = now_s();
     before = dit.forwards();

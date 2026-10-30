@@ -27,6 +27,7 @@
 #pragma once
 
 #include "ac/transformer.h"
+#include "ac/lora.h"
 #include "ggml.h"
 #include "gguf_model.h"
 #include "mg/kv_cache.h"
@@ -151,12 +152,12 @@ inline ggml_tensor* lm_qkv_slice(ggml_context* ctx, ggml_tensor* qkv, int dim, i
 inline ggml_tensor* lm_layer(ggml_context* ctx, const GgufModel& W, const std::string& p,
                              ggml_tensor* x, ggml_tensor* context, ggml_tensor* self_mask,
                              const KvCache& cache, int layer, int n_tokens,
-                             std::vector<ggml_tensor*>& cache_writes, const LmConfig& c) {
+                             std::vector<ggml_tensor*>& cache_writes, const LmConfig& c, const LoraMap* adapters = nullptr) {
     const int dim = c.dim;
 
     // --- self-attention: causal, over the whole history ---
     ggml_tensor* h = layer_norm(ctx, W, p + "norm1", x, c.norm_eps);
-    ggml_tensor* qkv = ggml_mul_mat(ctx, W.get(p + "self.qkv.weight"), h);
+    ggml_tensor* qkv = lora_linear(ctx, W, p + "self.qkv.weight", h, adapters);
     ggml_tensor* q = lm_to_attention(ctx, lm_qkv_slice(ctx, qkv, dim, 0), c.head_dim, c.heads);
     ggml_tensor* k = lm_to_attention(ctx, lm_qkv_slice(ctx, qkv, dim, 1), c.head_dim, c.heads);
     ggml_tensor* v = lm_to_attention(ctx, lm_qkv_slice(ctx, qkv, dim, 2), c.head_dim, c.heads);
@@ -168,7 +169,7 @@ inline ggml_tensor* lm_layer(ggml_context* ctx, const GgufModel& W, const std::s
     const float scale = 1.0f / std::sqrt((float)c.head_dim);
     ggml_tensor* o = nn::sdpa_vt(ctx, q, cache.k_history(ctx, layer, n_tokens),
                                  cache.v_history(ctx, layer, n_tokens), self_mask, scale);
-    o = ggml_mul_mat(ctx, W.get(p + "self.out.weight"), lm_from_heads(ctx, o, dim));
+    o = lora_linear(ctx, W, p + "self.out.weight", lm_from_heads(ctx, o, dim), adapters);
     x = ggml_add(ctx, x, o);
 
     // --- cross-attention onto the text, when there is any ---
@@ -179,8 +180,8 @@ inline ggml_tensor* lm_layer(ggml_context* ctx, const GgufModel& W, const std::s
     // residual is exactly 0.
     if (context) {
         ggml_tensor* hc = layer_norm(ctx, W, p + "norm_cross", x, c.norm_eps);
-        ggml_tensor* cq = ggml_mul_mat(ctx, W.get(p + "cross.q.weight"), hc);
-        ggml_tensor* ckv = ggml_mul_mat(ctx, W.get(p + "cross.kv.weight"), context);
+        ggml_tensor* cq = lora_linear(ctx, W, p + "cross.q.weight", hc, adapters);
+        ggml_tensor* ckv = lora_linear(ctx, W, p + "cross.kv.weight", context, adapters);
         ggml_tensor* q2 = lm_to_attention(ctx, cq, c.head_dim, c.heads);
         ggml_tensor* k2 = lm_to_attention(ctx, lm_qkv_slice(ctx, ckv, dim, 0),
                                           c.head_dim, c.heads);
@@ -193,13 +194,13 @@ inline ggml_tensor* lm_layer(ggml_context* ctx, const GgufModel& W, const std::s
                                              cross_scale, 0.0f);
         ggml_tensor* oc = ggml_mul_mat(
             ctx, ggml_cont(ctx, ggml_permute(ctx, v2, 1, 0, 2, 3)), kq2);
-        oc = ggml_mul_mat(ctx, W.get(p + "cross.out.weight"), lm_from_heads(ctx, oc, dim));
+        oc = lora_linear(ctx, W, p + "cross.out.weight", lm_from_heads(ctx, oc, dim), adapters);
         x = ggml_add(ctx, x, oc);
     }
 
     // --- feed-forward ---
     ggml_tensor* f = layer_norm(ctx, W, p + "norm2", x, c.norm_eps);
-    return ggml_add(ctx, x, feed_forward(ctx, W, p + "ff.", f));
+    return ggml_add(ctx, x, lora_linear(ctx, W, p + "ff.2.weight", ggml_gelu_erf(ctx, lora_linear(ctx, W, p + "ff.0.weight", f, adapters)), adapters));
 }
 
 // The logits for the *last* position, [card, n_q, n_seq].
@@ -224,7 +225,7 @@ inline ggml_tensor* lm_layer(ggml_context* ctx, const GgufModel& W, const std::s
 inline ggml_tensor* lm_forward(ggml_context* ctx, const GgufModel& W, ggml_tensor* ids,
                                ggml_tensor* pos_emb, ggml_tensor* context,
                                ggml_tensor* self_mask, const KvCache& cache, int n_tokens,
-                               std::vector<ggml_tensor*>& cache_writes, const LmConfig& c) {
+                               std::vector<ggml_tensor*>& cache_writes, const LmConfig& c, const LoraMap* adapters = nullptr) {
     // One embedding table per codebook, summed. Each row of `ids` is one codebook's tokens.
     ggml_tensor* x = nullptr;
     for (int k = 0; k < c.n_q; ++k) {
@@ -240,7 +241,7 @@ inline ggml_tensor* lm_forward(ggml_context* ctx, const GgufModel& W, ggml_tenso
 
     for (int i = 0; i < c.layers; ++i) {
         x = lm_layer(ctx, W, "lm." + std::to_string(i) + ".", x, context, self_mask, cache,
-                     i, n_tokens, cache_writes, c);
+                     i, n_tokens, cache_writes, c, adapters);
     }
 
     // Keep only the last position, then normalize and read the heads.

@@ -106,12 +106,21 @@ inline ggml_tensor* from_heads(ggml_context* ctx, ggml_tensor* o, int dim) {
 // Multi-head attention over tensors already in [head_dim, seq, n_head] layout, with the
 // optional zero key. `mask` is additive [n_keys, n_queries] or null.
 inline ggml_tensor* attention(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k,
-                              ggml_tensor* v, ggml_tensor* mask, bool add_zero_attn) {
+                              ggml_tensor* v, ggml_tensor* mask, bool add_zero_attn, bool training = false) {
     if (add_zero_attn) {
         k = prepend_zero_key(ctx, k);
         v = prepend_zero_key(ctx, v);
     }
     const float scale = 1.0f / std::sqrt((float)q->ne[0]);
+    if (training) {
+        // CONCAT backward assumes contiguous ne0; V transpose-backward is strided.
+        // This copy makes its incoming gradient contiguous. Always use dense attention
+        // here, since FLASH_ATTN_EXT has no automatic backward rule.
+        v = ggml_cont(ctx, v);
+        auto kq = ggml_soft_max_ext(ctx, ggml_mul_mat(ctx, k, q), mask, scale, 0.0f);
+        auto vt = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
+        return ggml_mul_mat(ctx, vt, kq);
+    }
     return nn::sdpa(ctx, q, k, v, mask, scale);
 }
 

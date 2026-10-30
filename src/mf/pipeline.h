@@ -32,7 +32,7 @@ namespace ac {
 class DitRunner {
 public:
     DitRunner(const GgufModel& dit, const DitConfig& config, const TextCondition& cond,
-              int frames);
+              int frames, const LoraMap* adapters = nullptr);
     ~DitRunner();
     DitRunner(const DitRunner&) = delete;
     DitRunner& operator=(const DitRunner&) = delete;
@@ -78,9 +78,11 @@ LatentStats mf_latent_stats(const GgufModel& dit, int latent_dim);
 // `MelodyFlow.edit`'s solver half: a normalized prompt latent [frames, latent_dim] in, the
 // edited latent out, still normalized. `noise` is only consulted by the regularized
 // inversion; `progress` is called with the same (elapsed, total) accounting terry reports.
+// Optional `inversion_dit` uses a separate field for source inversion, allowing the
+// base model to invert the source while an adapted model performs generation.
 std::vector<float> mf_edit_latent(DitRunner& dit, const std::vector<float>& prompt_latent,
                                   int frames, int latent_dim, const EditParams& params,
                                   const NoiseFn& noise, const ProgressFn& progress,
-                                  EditReport& report);
+                                  EditReport& report, DitRunner* inversion_dit = nullptr);
 
 } // namespace ac

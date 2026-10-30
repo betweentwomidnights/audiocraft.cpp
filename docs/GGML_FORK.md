@@ -217,3 +217,22 @@ Read the pin from a checkout rather than trusting this file:
 git -C ggml rev-parse HEAD          # b77ae790...
 git -C ggml log --oneline 19c5421c..HEAD
 ```
+
+## Training graph constraints
+
+The fork provides the backward primitives, but a complete model still needs gradient
+validation. MelodyFlow's experimental trainer uses a differentiable LayerNorm
+(SUM_ROWS, SCALE, centering, RMSNorm) and an erf approximation built from elementary
+ops. The original 0.17 audit found missing NORM/GELU_ERF autodiff and a scalar-only
+MEAN backward; the trainer retains these validated portable formulations on 0.27.
+
+The original CONCAT backward assumed a contiguous fastest dimension. V's attention transpose
+produces a strided incoming gradient; a training-only CONT before that transpose
+restores the layout before it reaches CONCAT. The DiT's final scaling is also moved
+after its output transpose in training to satisfy SCALE backward's layout contract.
+The 0.27 fork fixes noncontiguous CONCAT gradients, but the explicit layout handling
+is retained and tested. These changes leave the inference operation path intact. The complete tiny-DiT test
+checks finite differences through fused QKV, attention, stored-frequency RoPE, and
+U-ViT skips; a decreasing training loss alone is insufficient validation.
+
+See [MELODYFLOW_LORA.md](MELODYFLOW_LORA.md) for the experimental CLI and limitations.

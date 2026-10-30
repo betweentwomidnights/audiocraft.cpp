@@ -12,6 +12,8 @@
 #include "gguf_model.h"
 #include "mg/encodec.h"
 #include "mg/pipeline.h"
+#include "ac/prompt_pool.h"
+#include "ac/prompt_file.h"
 #include "wav.h"
 
 #include <chrono>
@@ -59,6 +61,11 @@ void usage() {
         "usage: mg-generate --lm <lm.gguf> --t5 <t5.gguf> [--codec <encodec.gguf>] [options]\n"
         "\n"
         "  --prompt <text>          text conditioning (default: empty)\n"
+        "  --lora <adapter.gguf>    MusicGen LoRA or DoRA rows adapter\n"
+        "  --lora-strength <f>      adapter strength (default 1)\n"
+        "  --prompt-file <path>     UTF-8 caption, avoids Windows argv conversion\n"
+        "  --smart-dice             choose a seeded training caption\n"
+        "  --prompt-pool <json>     defaults to adapter.prompts.json beside --lora\n"
         "  --codec <encodec.gguf>   EnCodec 32 kHz; needed to read or write audio\n"
         "  --input <in.wav>         audio to continue from (needs --codec)\n"
         "  --prompt-duration <s>    how much of --input to use as the prompt (default 6)\n"
@@ -79,6 +86,7 @@ void usage() {
 } // namespace
 
 int main(int argc, char** argv) {
+    std::string lora_path, pool_path; bool smart_dice=false; float lora_strength=1;
     std::string lm_path, t5_path, codec_path, in_path, out_path;
     std::string prompt_codes_path, out_codes, out_logits, device, prompt;
     double duration = 30.0, prompt_duration = 6.0;
@@ -94,9 +102,23 @@ int main(int argc, char** argv) {
             if (i + 1 >= argc) { fprintf(stderr, "error: %s needs a value\n", what); exit(2); }
             return argv[++i];
         };
-        if (a == "--lm") lm_path = next("--lm");
+        if (a == "--lora") lora_path=next("--lora");
+        else if (a == "--lora-strength") {
+            const auto value = next("--lora-strength"); char* end = nullptr;
+            lora_strength = std::strtof(value.c_str(), &end);
+            if (end == value.c_str() || *end || !std::isfinite(lora_strength)) {
+                fprintf(stderr,"error: --lora-strength needs a finite number\n"); return 2;
+            }
+        }
+        else if (a == "--prompt-pool") pool_path=next("--prompt-pool");
+        else if (a == "--smart-dice") smart_dice=true;
+        else if (a == "--lm") lm_path = next("--lm");
         else if (a == "--t5") t5_path = next("--t5");
         else if (a == "--prompt") prompt = next("--prompt");
+        else if (a == "--prompt-file") {
+            try { prompt = ac::read_prompt_file(next("--prompt-file")); }
+            catch (const std::exception& e) { fprintf(stderr,"error: %s\n",e.what()); return 2; }
+        }
         else if (a == "--codec") codec_path = next("--codec");
         else if (a == "--input") in_path = next("--input");
         else if (a == "--out") out_path = next("--out");
@@ -130,6 +152,12 @@ int main(int argc, char** argv) {
     }
 
     try {
+        if (!std::isfinite(lora_strength)) throw std::runtime_error("invalid adapter strength");
+        if (smart_dice) {
+            if (!prompt.empty()) throw std::runtime_error("--smart-dice and --prompt are mutually exclusive");
+            if (pool_path.empty()) { if(lora_path.empty()) throw std::runtime_error("smart dice needs an adapter or prompt pool"); pool_path=ac::prompt_pool_path(lora_path); }
+            prompt=ac::dice_prompt(pool_path,seed);
+        }
         double t0 = now_s();
         const ac::TextCondition cond = ac::encode_prompt(t5_path, prompt, device);
         fprintf(stderr, "[ac] t5: %d token(s) in %.3fs -- \"%s\"\n",
@@ -171,6 +199,8 @@ int main(int argc, char** argv) {
         ac::GgufModel lm = ac::load_gguf(
             lm_path.c_str(), ac::make_backend(0, device.empty() ? nullptr : device.c_str()));
         const ac::LmConfig c = ac::LmConfig::from(lm);
+        ac::GgufModel adapter; ac::LoraMap adapters;
+        if (!lora_path.empty()) { adapter=ac::load_gguf(lora_path.c_str(),lm.backend); adapters=ac::load_mg_lora(lm,adapter,lora_strength); }
         if (c.cond_dim != (int)(cond.hidden.size() / cond.tokens))
             throw std::runtime_error("text encoder width does not match the LM's cond_dim");
 
@@ -210,7 +240,7 @@ int main(int argc, char** argv) {
 
         ac::GenerateReport report;
         const std::vector<int32_t> codes =
-            ac::mg_generate(lm, c, cond, prompt_codes, prompt_len, params, progress, report);
+            ac::mg_generate(lm, c, cond, prompt_codes, prompt_len, params, progress, report, adapters.empty()?nullptr:&adapters);
         fprintf(stderr, "\r[ac] prefill %d token(s) in %.2fs, %d decode step(s) in %.2fs "
                         "(%.1f steps/s), %d forward(s)\n",
                 report.prefill_tokens, report.prefill_seconds, report.decode_steps,
