@@ -101,6 +101,14 @@ version (`musicgen-vanya-dnb-0.4B-v1.0-F16.gguf` becomes `vanya-dnb`), and group
 parameter count in the file rather than by guessing from the name. F16 wins over F32 for the
 same model: half the file, for a difference that never reaches the tokens gary samples.
 
+The reply itself is the Python's shape, because gary4juce reads nothing else: each entry is
+`{name, path, type: "single"}`, or a `group` of `{name, path, epoch}` checkpoints for names
+ending in `-<digits>`, and the plugin sends the chosen `path` back as `model_name`. A bare
+list of names leaves its dropdown empty. So `path` is the repo the gguf was converted from,
+which the converter records as `general.base_model.0.repo_url` (`thepatch/vanya_ai_dnb_0.1`),
+and `model_name` takes that id or the file's own name. A gguf with no recorded repo is listed
+by its file name.
+
 **`/variations` works.** The Python reads `VARIATIONS[name]['flowstep']` where the table
 defines `default_flowstep`, so that endpoint raises a `KeyError` and 500s today. The preset
 table here is generated from the service's own `variations.py` by

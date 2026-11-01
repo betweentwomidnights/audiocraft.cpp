@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(audiocraft_cpp VERSION 0.1.0 LANGUAGES C CXX)
+project(audiocraft_cpp VERSION 0.1.1 LANGUAGES C CXX)
 
 include(CTest)
 
@@ -145,6 +145,9 @@ if(AC_BUILD_TOOLS)
 
     add_executable(ac-encodec tools/ac-encodec.cpp)
     target_link_libraries(ac-encodec PRIVATE ac)
+
+    add_executable(ac-quantize tools/ac-quantize.cpp)
+    target_link_libraries(ac-quantize PRIVATE ac)
 
     if(AC_BUILD_MELODYFLOW)
         add_executable(mf-train tools/mf-train.cpp)
