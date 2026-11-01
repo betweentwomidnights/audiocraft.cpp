@@ -24,6 +24,21 @@ struct MgModel {
     std::string size;  // small, medium or large
 };
 
+// Which of a model's files the server runs when several precisions are present, from its
+// `-<ENCODING>.gguf` suffix: lower is preferred, -1 is not a model file. F16 leads, as half
+// of F32 for a difference that never reaches the tokens gary samples; the quantized mixes
+// follow from the most faithful down.
+inline int mg_encoding_rank(const std::string& file) {
+    static const char* order[] = {"F16", "F32", "Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M"};
+    for (int i = 0; i < (int)(sizeof(order) / sizeof(order[0])); ++i) {
+        const std::string suffix = std::string("-") + order[i] + ".gguf";
+        if (file.size() > suffix.size() &&
+            file.compare(file.size() - suffix.size(), suffix.size(), suffix) == 0)
+            return i;
+    }
+    return -1;
+}
+
 // `https://huggingface.co/thepatch/vanya_ai_dnb_0.1` -> `thepatch/vanya_ai_dnb_0.1`.
 // Anything else is not a repo id, and an empty result says so.
 inline std::string repo_id(const std::string& url) {

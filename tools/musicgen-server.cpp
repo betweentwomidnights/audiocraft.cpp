@@ -79,18 +79,19 @@ std::string find_model(const std::string& stem) {
 // Every `musicgen-*.gguf` in the models directory, keyed by the part between the prefix and
 // the version. `musicgen-vanya-dnb-0.4B-v1.0-F16.gguf` becomes `vanya-dnb`.
 //
-// F16 wins over F32 for the same name: it is half the file for a difference that never
-// reaches the tokens gary samples.
+// When a model is present at several precisions the best one runs, by mg_encoding_rank:
+// F16, then F32, then the quantized mixes from Q8_0 down.
 void discover_models() {
     namespace fs = std::filesystem;
     std::error_code ec;
     if (!fs::is_directory(g_models_dir, ec)) return;
-    std::map<std::string, std::string> f32;
+    std::map<std::string, int> rank;
     for (const auto& entry : fs::directory_iterator(g_models_dir, ec)) {
         const std::string file = entry.path().filename().string();
         if (file.rfind("musicgen-", 0) != 0) continue;
         const size_t version = file.find("-v1.0-");
-        if (version == std::string::npos) continue;
+        const int r = mg_encoding_rank(file);
+        if (version == std::string::npos || r < 0) continue;
         std::string name = file.substr(9, version - 9);
         // Trim the size label the artifact convention appends, e.g. "-0.4B".
         const size_t dash = name.rfind('-');
@@ -98,11 +99,11 @@ void discover_models() {
             (name.back() == 'B' || name.back() == 'M')) {
             name = name.substr(0, dash);
         }
-        const std::string path = entry.path().string();
-        if (file.find("-F16.gguf") != std::string::npos) g_lms[name] = path;
-        else if (file.find("-F32.gguf") != std::string::npos) f32[name] = path;
+        const auto it = rank.find(name);
+        if (it != rank.end() && it->second <= r) continue;
+        rank[name] = r;
+        g_lms[name] = entry.path().string();
     }
-    for (const auto& kv : f32) g_lms.emplace(kv.first, kv.second);
 }
 
 // What the picker needs from each gguf: its size group, from the parameter count rather than

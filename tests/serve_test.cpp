@@ -183,6 +183,16 @@ int main() {
         check_eq(mg_model_key(models, "vanya-dnb"), "vanya-dnb", "a file name still resolves");
         check_eq(mg_model_key(models, "thepatch/gary_orchestra_2"), "", "an unconverted model does not");
     }
+    // The precision a model runs at when more than one is on disk.
+    check(mg_encoding_rank("musicgen-vanya-dnb-0.4B-v1.0-F16.gguf") <
+              mg_encoding_rank("musicgen-vanya-dnb-0.4B-v1.0-F32.gguf"), "F16 before F32");
+    check(mg_encoding_rank("musicgen-hoenn-lofi-3.3B-v1.0-Q8_0.gguf") <
+              mg_encoding_rank("musicgen-hoenn-lofi-3.3B-v1.0-Q4_K_M.gguf"), "Q8_0 before Q4_K_M");
+    check(mg_encoding_rank("musicgen-hoenn-lofi-3.3B-v1.0-F32.gguf") <
+              mg_encoding_rank("musicgen-hoenn-lofi-3.3B-v1.0-Q8_0.gguf"), "unquantized before quantized");
+    check(mg_encoding_rank("musicgen-hoenn-lofi-3.3B-v1.0-Q4_K_M.gguf.part") < 0, "a partial download is no model");
+    check(mg_encoding_rank("musicgen-hoenn-lofi-3.3B-v1.0-Q2_K.gguf") < 0, "an unknown encoding is no model");
+
     check_eq(mg_models_json({}),
              "{\"success\":true,\"models\":{\"small\":[],\"medium\":[],\"large\":[]},\"source\":\"audiocraft.cpp\"}",
              "no models is three empty sizes");
