@@ -171,8 +171,14 @@ default to and therefore what the plugin already handles.
   thirteen `thepatch/*` finetunes need converting and publishing as GGUF before
   `/api/models` can offer what the Python service does. The converter is driven entirely by
   `xp.cfg` and should handle medium and large unchanged.
-- **Quantized tiers.** Q8_0 and below are unmeasured for both models. `tools/cossim.py`
-  reports rms-envelope and log-spectrum alongside raw cosine for exactly this.
+- **Quantized tiers.** MusicGen's LM quantizes with `ac-quantize` (Q8_0, and Q4_K_M/Q5_K_M
+  with the FFN down projection, cross-attention K/V, embeddings and heads at Q6_K), and
+  `musicgen-server` runs a model's best precision on disk. For musicgen-large finetunes on an
+  RTX 5070 Laptop (CUDA), a guided 30 s continuation from a 6 s prompt took about 43 s at
+  either tier and peaked at about 4.5 GiB over idle at Q4_K_M and 5.7 GiB at Q8_0; F16
+  spilled past 8 GB and took over 100 s. Every tensor round-trips at cosine 0.9966 or better.
+  Listening is the remaining check. MelodyFlow's DiT stays F16 for now; `tools/cossim.py`
+  reports rms-envelope and log-spectrum alongside raw cosine for when it is quantized.
 - **No queue depth.** `queue_status` is always `{}`. The Python services report a position
   and an estimate; nothing in the plugin depends on it, and one job at a time makes it
   meaningless, but a client that displays it will show nothing.
