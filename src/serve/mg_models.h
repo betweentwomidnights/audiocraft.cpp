@@ -34,10 +34,14 @@ inline std::string repo_id(const std::string& url) {
     return id.find('/') == std::string::npos ? std::string() : id;
 }
 
+// A picker entry while grouping. At namespace scope: GCC 13 crashes (an internal compiler
+// error in apply_identity_attributes) on this as a local struct inside an inline function.
+struct MgEntry { std::string name, path; bool checkpoint = false; long epoch = 0; };
+
 // One size's entries, grouped as the Python groups them: a name ending in `-<digits>` is a
 // checkpoint of everything sharing the part before it, and anything else stands alone.
 inline std::string mg_model_group(const std::vector<MgModel>& models) {
-    struct Entry { std::string name, path; bool checkpoint = false; long epoch = 0; };
+    using Entry = MgEntry;
     std::vector<std::string> order;
     std::map<std::string, std::vector<Entry>> groups;
     for (const auto& m : models) {
