@@ -100,12 +100,18 @@ inline std::string mg_model_group(const std::vector<MgModel>& models) {
     return out + "]";
 }
 
+// Meta's own checkpoints, which the Python never listed.
+inline bool mg_is_base_model(const MgModel& m) { return m.id.rfind("facebook/", 0) == 0; }
+
 inline std::string mg_models_json(const std::vector<MgModel>& models) {
     std::string out = "{\"success\":true,\"models\":{";
     const char* sizes[] = {"small", "medium", "large"};
     for (int s = 0; s < 3; ++s) {
+        // Finetunes first, base models after: gary4juce selects the first entry it reads,
+        // and the Python's first was vanya_ai_dnb_0.1.
         std::vector<MgModel> group;
-        for (const auto& m : models) if (m.size == sizes[s]) group.push_back(m);
+        for (const auto& m : models) if (m.size == sizes[s] && !mg_is_base_model(m)) group.push_back(m);
+        for (const auto& m : models) if (m.size == sizes[s] && mg_is_base_model(m)) group.push_back(m);
         if (s) out += ',';
         out += json_string(sizes[s]) + ":" + mg_model_group(group);
     }
