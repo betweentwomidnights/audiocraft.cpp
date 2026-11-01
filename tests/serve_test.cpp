@@ -193,6 +193,15 @@ int main() {
     check(mg_encoding_rank("musicgen-hoenn-lofi-3.3B-v1.0-Q4_K_M.gguf.part") < 0, "a partial download is no model");
     check(mg_encoding_rank("musicgen-hoenn-lofi-3.3B-v1.0-Q2_K.gguf") < 0, "an unknown encoding is no model");
 
+    // A base model sorts after the finetunes of its size, so vanya stays gary4juce's first.
+    check_eq(mg_models_json({{"small", "facebook/musicgen-small", "small"},
+                             {"vanya-dnb", "thepatch/vanya_ai_dnb_0.1", "small"}}),
+             "{\"success\":true,\"models\":{"
+             "\"small\":[{\"name\":\"vanya_ai_dnb_0.1\",\"path\":\"thepatch/vanya_ai_dnb_0.1\",\"type\":\"single\"},"
+             "{\"name\":\"musicgen-small\",\"path\":\"facebook/musicgen-small\",\"type\":\"single\"}],"
+             "\"medium\":[],\"large\":[]},\"source\":\"audiocraft.cpp\"}",
+             "base models follow the finetunes");
+
     check_eq(mg_models_json({}),
              "{\"success\":true,\"models\":{\"small\":[],\"medium\":[],\"large\":[]},\"source\":\"audiocraft.cpp\"}",
              "no models is three empty sizes");

@@ -17,6 +17,11 @@
 // user has not converted would fail at generation time instead of at the picker. The reply
 // keeps the Python's shape, listing each model by the repo it was converted from, and
 // `model_name` takes that repo id or the file's own name (serve/mg_models.h).
+//
+// The models directory is read again on every request rather than once at startup, so a
+// model gary4local downloads or removes while the server runs is listed, or not, on the
+// next `/api/models`. The Python's list never changed, so nothing restarts this server
+// after a download.
 #include "ac/codec.h"
 #include "ac/conditioner.h"
 #include "gguf_model.h"
@@ -36,6 +41,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -47,13 +53,17 @@ AdapterCatalog g_adapters;
 std::string g_adapters_dir;
 std::string g_models_dir;
 std::string g_device;
-std::string g_codec, g_t5;
 Sessions g_sessions;
 
-// name -> gguf path, discovered at startup.
-std::map<std::string, std::string> g_lms;
-// The same models as the picker lists them.
-std::vector<MgModel> g_models;
+// What is on disk now. Each request takes its own copy, so a model removed mid-generation
+// cannot change the paths a running job already resolved.
+struct Catalog {
+    std::string codec, t5;
+    // name -> gguf path
+    std::map<std::string, std::string> lms;
+    // The same models as the picker lists them.
+    std::vector<MgModel> models;
+};
 
 std::string env_or(const char* key, const std::string& fallback) {
     const char* v = getenv(key);
@@ -81,10 +91,11 @@ std::string find_model(const std::string& stem) {
 //
 // When a model is present at several precisions the best one runs, by mg_encoding_rank:
 // F16, then F32, then the quantized mixes from Q8_0 down.
-void discover_models() {
+std::map<std::string, std::string> discover_models() {
     namespace fs = std::filesystem;
+    std::map<std::string, std::string> lms;
     std::error_code ec;
-    if (!fs::is_directory(g_models_dir, ec)) return;
+    if (!fs::is_directory(g_models_dir, ec)) return lms;
     std::map<std::string, int> rank;
     for (const auto& entry : fs::directory_iterator(g_models_dir, ec)) {
         const std::string file = entry.path().filename().string();
@@ -102,27 +113,47 @@ void discover_models() {
         const auto it = rank.find(name);
         if (it != rank.end() && it->second <= r) continue;
         rank[name] = r;
-        g_lms[name] = entry.path().string();
+        lms[name] = entry.path().string();
     }
+    return lms;
 }
 
-// What the picker needs from each gguf: its size group, from the parameter count rather than
+// What the picker needs from a gguf: its size group, from the parameter count rather than
 // guessing from the name, and the repo it was converted from.
-void describe_models() {
-    for (const auto& kv : g_lms) {
-        MgModel m{kv.first, kv.first, "small"};
-        try {
-            ac::GgufModel meta = ac::load_gguf_metadata(kv.second.c_str());
-            const uint64_t params = meta.u64("ac.lm.parameter_count");
-            m.size = params < 700ull * 1000 * 1000 ? "small"
-                   : params < 2000ull * 1000 * 1000 ? "medium" : "large";
-            const std::string id = repo_id(meta.string("general.base_model.0.repo_url"));
-            if (!id.empty()) m.id = id;
-        } catch (...) {
-            // Listed under its own name in the small group, as before.
-        }
-        g_models.push_back(m);
+MgModel describe_model(const std::string& name, const std::string& path) {
+    MgModel m{name, name, "small"};
+    try {
+        ac::GgufModel meta = ac::load_gguf_metadata(path.c_str());
+        const uint64_t params = meta.u64("ac.lm.parameter_count");
+        m.size = params < 700ull * 1000 * 1000 ? "small"
+               : params < 2000ull * 1000 * 1000 ? "medium" : "large";
+        const std::string id = repo_id(meta.string("general.base_model.0.repo_url"));
+        if (!id.empty()) m.id = id;
+    } catch (...) {
+        // Listed under its own name in the small group.
     }
+    return m;
+}
+
+// The models directory as it is now. A file's header is read once per modification time:
+// listing the directory is cheap, reopening every gguf on each poll is not.
+Catalog scan_models() {
+    static std::mutex mutex;
+    static std::map<std::string, std::pair<std::filesystem::file_time_type, MgModel>> described;
+    Catalog c;
+    c.codec = find_model("encodec-32khz-v1.0");
+    c.t5 = find_model("t5-base-encoder-0.1B-v1.0");
+    c.lms = discover_models();
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const auto& kv : c.lms) {
+        std::error_code ec;
+        const auto stamp = std::filesystem::last_write_time(kv.second, ec);
+        auto it = described.find(kv.second);
+        if (it == described.end() || it->second.first != stamp)
+            it = described.insert_or_assign(kv.second, std::make_pair(stamp, describe_model(kv.first, kv.second))).first;
+        c.models.push_back(it->second.second);
+    }
+    return c;
 }
 
 struct Json {
@@ -166,6 +197,8 @@ struct Json {
 
 struct GenerateRequest {
     std::string adapter; float adapter_strength=1;
+    // Resolved from the catalog when the job starts.
+    std::string lm_path, codec, t5;
     std::string audio_b64;
     std::string model;
     std::string description;
@@ -181,16 +214,13 @@ struct GenerateRequest {
 
 // gary's transform, staged the way mg-generate stages it: text, codec, LM, codec.
 std::string run_generation(const GenerateRequest& req, const std::string& session) {
-    const auto it = g_lms.find(req.model);
-    if (it == g_lms.end()) throw std::runtime_error("unknown model: " + req.model);
-
-    const ac::TextCondition cond = ac::encode_prompt(g_t5, req.description, g_device);
+    const ac::TextCondition cond = ac::encode_prompt(req.t5, req.description, g_device);
 
     std::vector<int32_t> prompt_codes;
     int prompt_len = 0, frame_rate = 50, sample_rate = 32000, channels = 1;
     {
         ac::GgufModel codec = ac::load_gguf(
-            g_codec.c_str(), ac::make_backend(0, g_device.empty() ? nullptr : g_device.c_str()));
+            req.codec.c_str(), ac::make_backend(0, g_device.empty() ? nullptr : g_device.c_str()));
         const ac::SeanetConfig c = ac::SeanetConfig::from(codec);
         frame_rate = c.frame_rate;
         sample_rate = c.sample_rate;
@@ -211,7 +241,7 @@ std::string run_generation(const GenerateRequest& req, const std::string& sessio
     int timesteps = 0;
     {
         ac::GgufModel lm = ac::load_gguf(
-            it->second.c_str(), ac::make_backend(0, g_device.empty() ? nullptr : g_device.c_str()));
+            req.lm_path.c_str(), ac::make_backend(0, g_device.empty() ? nullptr : g_device.c_str()));
         const ac::LmConfig c = ac::LmConfig::from(lm);
         ac::GgufModel adapter;ac::LoraMap adapters;
         if(!req.adapter.empty()){adapter=ac::load_gguf(g_adapters.path(req.adapter).c_str(),lm.backend);adapters=ac::load_mg_lora(lm,adapter,req.adapter_strength);}
@@ -232,7 +262,7 @@ std::string run_generation(const GenerateRequest& req, const std::string& sessio
     }
 
     ac::GgufModel codec = ac::load_gguf(
-        g_codec.c_str(), ac::make_backend(0, g_device.empty() ? nullptr : g_device.c_str()));
+        req.codec.c_str(), ac::make_backend(0, g_device.empty() ? nullptr : g_device.c_str()));
     const ac::SeanetConfig c = ac::SeanetConfig::from(codec);
     const ac::RvqCodebooks books = ac::rvq_load(codec, c.rvq_n_q, c.rvq_bins, c.latent_dim);
     const std::vector<float> latent = ac::rvq_decode(books, codes, timesteps);
@@ -277,24 +307,29 @@ void start_generation(GenerateRequest req, const char* started_message,
         res.set_content(json_error("audio_data is required"), "application/json");
         return;
     }
-    if (req.model.empty()) {
-        if (g_lms.empty()) {
-            res.status = 503;
-            res.set_content(json_error("no musicgen gguf in " + g_models_dir),
-                            "application/json");
-            return;
-        }
-        req.model = g_lms.begin()->first;
+    const Catalog catalog = scan_models();
+    const char* missing = catalog.lms.empty() ? "musicgen"
+                        : catalog.codec.empty() ? "encodec"
+                        : catalog.t5.empty() ? "t5" : nullptr;
+    if (missing) {
+        res.status = 503;
+        res.set_content(json_error(std::string("no ") + missing + " gguf in " + g_models_dir),
+                        "application/json");
+        return;
     }
-    if (const std::string key = mg_model_key(g_models, req.model); !key.empty()) req.model = key;
-    if (!g_lms.count(req.model)) {
+    if (req.model.empty()) req.model = catalog.lms.begin()->first;
+    if (const std::string key = mg_model_key(catalog.models, req.model); !key.empty()) req.model = key;
+    if (!catalog.lms.count(req.model)) {
         res.status = 400;
         res.set_content(json_error("Unknown model: " + req.model), "application/json");
         return;
     }
+    req.lm_path = catalog.lms.at(req.model);
+    req.codec = catalog.codec;
+    req.t5 = catalog.t5;
     if (!req.adapter.empty()) {
         auto adapter = ac::load_gguf_metadata(g_adapters.path(req.adapter).c_str());
-        auto base = ac::load_gguf_metadata(g_lms.at(req.model).c_str());
+        auto base = ac::load_gguf_metadata(req.lm_path.c_str());
         if (adapter.string("ac.lora.base_name") != base.string("general.name")) {
             res.status = 400;
             res.set_content(json_error("adapter base model does not match selected model"), "application/json");
@@ -371,16 +406,17 @@ int main(int argc, char** argv) {
         else { fprintf(stderr, "error: unknown argument '%s'\n", a.c_str()); usage(); return 2; }
     }
 
-    g_codec = find_model("encodec-32khz-v1.0");
-    g_t5 = find_model("t5-base-encoder-0.1B-v1.0");
-    discover_models();
-    describe_models();
-    if (g_codec.empty()) fprintf(stderr, "[ac] warning: no encodec gguf in %s\n",
-                                 g_models_dir.c_str());
-    if (g_t5.empty()) fprintf(stderr, "[ac] warning: no t5 gguf in %s\n", g_models_dir.c_str());
-    fprintf(stderr, "[ac] %zu musicgen model(s) in %s\n", g_lms.size(), g_models_dir.c_str());
-    for (const auto& kv : g_lms) fprintf(stderr, "[ac]   %s -> %s\n", kv.first.c_str(),
-                                         kv.second.c_str());
+    {
+        const Catalog catalog = scan_models();
+        if (catalog.codec.empty()) fprintf(stderr, "[ac] warning: no encodec gguf in %s\n",
+                                           g_models_dir.c_str());
+        if (catalog.t5.empty()) fprintf(stderr, "[ac] warning: no t5 gguf in %s\n",
+                                        g_models_dir.c_str());
+        fprintf(stderr, "[ac] %zu musicgen model(s) in %s\n", catalog.lms.size(),
+                g_models_dir.c_str());
+        for (const auto& kv : catalog.lms) fprintf(stderr, "[ac]   %s -> %s\n", kv.first.c_str(),
+                                                   kv.second.c_str());
+    }
 
     if(g_adapters_dir.empty())g_adapters_dir=(std::filesystem::path(g_models_dir)/"adapters").string();
     g_adapters.discover(g_adapters_dir,"ac-musicgen-lora");
@@ -389,7 +425,8 @@ int main(int argc, char** argv) {
     server.set_payload_max_length(256ull * 1024 * 1024);
 
     server.Get("/health", [](const httplib::Request&, httplib::Response& res) {
-        const bool ready = !g_codec.empty() && !g_t5.empty() && !g_lms.empty();
+        const Catalog catalog = scan_models();
+        const bool ready = !catalog.codec.empty() && !catalog.t5.empty() && !catalog.lms.empty();
         JsonObject o;
         o.str("status", ready ? "live" : "degraded")
          .str("service", "gary4juce-localhost")
@@ -397,13 +434,13 @@ int main(int argc, char** argv) {
          .str("backend", "audiocraft.cpp")
          .str("models_dir", g_models_dir)
          .str("device", g_device.empty() ? "auto" : g_device)
-         .num("models", (double)g_lms.size());
+         .num("models", (double)catalog.lms.size());
         res.status = ready ? 200 : 500;
         res.set_content(o.str(), "application/json");
     });
 
     server.Get("/api/models", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content(mg_models_json(g_models), "application/json");
+        res.set_content(mg_models_json(scan_models().models), "application/json");
     });
 
     auto generation_route = [](bool from_start, const char* message) {
