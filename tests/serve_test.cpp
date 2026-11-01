@@ -8,6 +8,7 @@
 // The audio path is checked as a round trip through the same helpers the servers use, so a
 // change to either side has to keep them consistent.
 #include "serve/http.h"
+#include "serve/mg_models.h"
 
 #include <cmath>
 #include <cstdio>
@@ -150,6 +151,41 @@ int main() {
         check(false, "a requested seed of -1 stays in the readable range");
         break;
     }
+
+    // --- gary's model picker -------------------------------------------------------------
+    // gary4juce reads only objects and sends `path` back as `model_name`, so the reply has to
+    // be the Python's shape, keyed by repo id.
+    check_eq(repo_id("https://huggingface.co/thepatch/vanya_ai_dnb_0.1"), "thepatch/vanya_ai_dnb_0.1",
+             "repo id from the converter's url");
+    check_eq(repo_id("https://huggingface.co/thepatch/vanya_ai_dnb_0.1/"), "thepatch/vanya_ai_dnb_0.1",
+             "a trailing slash is not part of the id");
+    check_eq(repo_id("https://example.com/thepatch/x"), "", "only hugging face urls are repo ids");
+    check_eq(repo_id("https://huggingface.co/vanya"), "", "an id has an owner");
+    {
+        const std::vector<MgModel> models = {
+            {"vanya-dnb", "thepatch/vanya_ai_dnb_0.1", "small"},
+            {"bleeps-large-6", "thepatch/bleeps-large-6", "large"},
+            {"bleeps-large-14", "thepatch/bleeps-large-14", "large"},
+            {"bleeps-large-8", "thepatch/bleeps-large-8", "large"},
+            {"local", "local", "medium"},
+        };
+        check_eq(mg_models_json(models),
+                 "{\"success\":true,\"models\":{"
+                 "\"small\":[{\"name\":\"vanya_ai_dnb_0.1\",\"path\":\"thepatch/vanya_ai_dnb_0.1\",\"type\":\"single\"}],"
+                 "\"medium\":[{\"name\":\"local\",\"path\":\"local\",\"type\":\"single\"}],"
+                 "\"large\":[{\"name\":\"bleeps-large\",\"type\":\"group\",\"checkpoints\":["
+                 "{\"name\":\"bleeps-large-6\",\"path\":\"thepatch/bleeps-large-6\",\"epoch\":6},"
+                 "{\"name\":\"bleeps-large-8\",\"path\":\"thepatch/bleeps-large-8\",\"epoch\":8},"
+                 "{\"name\":\"bleeps-large-14\",\"path\":\"thepatch/bleeps-large-14\",\"epoch\":14}]}]},"
+                 "\"source\":\"audiocraft.cpp\"}",
+                 "models listed in g4l_localhost.py's shape");
+        check_eq(mg_model_key(models, "thepatch/vanya_ai_dnb_0.1"), "vanya-dnb", "a repo id resolves");
+        check_eq(mg_model_key(models, "vanya-dnb"), "vanya-dnb", "a file name still resolves");
+        check_eq(mg_model_key(models, "thepatch/gary_orchestra_2"), "", "an unconverted model does not");
+    }
+    check_eq(mg_models_json({}),
+             "{\"success\":true,\"models\":{\"small\":[],\"medium\":[],\"large\":[]},\"source\":\"audiocraft.cpp\"}",
+             "no models is three empty sizes");
 
     if (failures) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

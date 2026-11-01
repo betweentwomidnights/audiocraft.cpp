@@ -14,7 +14,9 @@
 // One divergence, and it is the point of the exercise: `/api/models` reports the GGUFs
 // actually present rather than a hardcoded list of `thepatch/*` repositories. A native
 // service cannot fetch and convert a PyTorch checkpoint on demand, and offering a model the
-// user has not converted would fail at generation time instead of at the picker.
+// user has not converted would fail at generation time instead of at the picker. The reply
+// keeps the Python's shape, listing each model by the repo it was converted from, and
+// `model_name` takes that repo id or the file's own name (serve/mg_models.h).
 #include "ac/codec.h"
 #include "ac/conditioner.h"
 #include "gguf_model.h"
@@ -22,6 +24,7 @@
 #include "mg/pipeline.h"
 #include "serve/http.h"
 #include "serve/adapters.h"
+#include "serve/mg_models.h"
 #include "serve/runtime.h"
 
 #include "httplib.h"
@@ -49,6 +52,8 @@ Sessions g_sessions;
 
 // name -> gguf path, discovered at startup.
 std::map<std::string, std::string> g_lms;
+// The same models as the picker lists them.
+std::vector<MgModel> g_models;
 
 std::string env_or(const char* key, const std::string& fallback) {
     const char* v = getenv(key);
@@ -99,17 +104,22 @@ void discover_models() {
     for (const auto& kv : f32) g_lms.emplace(kv.first, kv.second);
 }
 
-// The picker groups by size; the parameter count is in the gguf, so read it rather than
-// guessing from the name.
-std::string size_group(const std::string& path) {
-    try {
-        ac::GgufModel m = ac::load_gguf_metadata(path.c_str());
-        const uint64_t params = m.u64("ac.lm.parameter_count");
-        if (params < 700ull * 1000 * 1000) return "small";
-        if (params < 2000ull * 1000 * 1000) return "medium";
-        return "large";
-    } catch (...) {
-        return "small";
+// What the picker needs from each gguf: its size group, from the parameter count rather than
+// guessing from the name, and the repo it was converted from.
+void describe_models() {
+    for (const auto& kv : g_lms) {
+        MgModel m{kv.first, kv.first, "small"};
+        try {
+            ac::GgufModel meta = ac::load_gguf_metadata(kv.second.c_str());
+            const uint64_t params = meta.u64("ac.lm.parameter_count");
+            m.size = params < 700ull * 1000 * 1000 ? "small"
+                   : params < 2000ull * 1000 * 1000 ? "medium" : "large";
+            const std::string id = repo_id(meta.string("general.base_model.0.repo_url"));
+            if (!id.empty()) m.id = id;
+        } catch (...) {
+            // Listed under its own name in the small group, as before.
+        }
+        g_models.push_back(m);
     }
 }
 
@@ -274,6 +284,7 @@ void start_generation(GenerateRequest req, const char* started_message,
         }
         req.model = g_lms.begin()->first;
     }
+    if (const std::string key = mg_model_key(g_models, req.model); !key.empty()) req.model = key;
     if (!g_lms.count(req.model)) {
         res.status = 400;
         res.set_content(json_error("Unknown model: " + req.model), "application/json");
@@ -361,6 +372,7 @@ int main(int argc, char** argv) {
     g_codec = find_model("encodec-32khz-v1.0");
     g_t5 = find_model("t5-base-encoder-0.1B-v1.0");
     discover_models();
+    describe_models();
     if (g_codec.empty()) fprintf(stderr, "[ac] warning: no encodec gguf in %s\n",
                                  g_models_dir.c_str());
     if (g_t5.empty()) fprintf(stderr, "[ac] warning: no t5 gguf in %s\n", g_models_dir.c_str());
@@ -389,24 +401,7 @@ int main(int argc, char** argv) {
     });
 
     server.Get("/api/models", [](const httplib::Request&, httplib::Response& res) {
-        std::map<std::string, std::vector<std::string>> groups{
-            {"small", {}}, {"medium", {}}, {"large", {}}};
-        for (const auto& kv : g_lms) groups[size_group(kv.second)].push_back(kv.first);
-
-        std::string body = "{\"models\":{";
-        bool first_group = true;
-        for (const auto& g : groups) {
-            if (!first_group) body += ',';
-            first_group = false;
-            body += json_string(g.first) + ":[";
-            for (size_t i = 0; i < g.second.size(); ++i) {
-                if (i) body += ',';
-                body += json_string(g.second[i]);
-            }
-            body += ']';
-        }
-        body += "},\"source\":\"audiocraft.cpp\"}";
-        res.set_content(body, "application/json");
+        res.set_content(mg_models_json(g_models), "application/json");
     });
 
     auto generation_route = [](bool from_start, const char* message) {
