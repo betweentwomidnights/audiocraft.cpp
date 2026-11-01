@@ -69,7 +69,8 @@ bool file_exists(const std::string& path) {
 
 std::string find_model(const std::string& stem) {
     for (const char* suffix : {"-F16.gguf", "-F32.gguf"}) {
-        const std::string path = g_models_dir + "/" + stem + suffix;
+        // A path join, not "/": a \\?\ verbatim models dir takes no forward slashes.
+        const std::string path = (std::filesystem::path(g_models_dir) / (stem + suffix)).string();
         if (file_exists(path)) return path;
     }
     return {};
@@ -380,7 +381,7 @@ int main(int argc, char** argv) {
     for (const auto& kv : g_lms) fprintf(stderr, "[ac]   %s -> %s\n", kv.first.c_str(),
                                          kv.second.c_str());
 
-    if(g_adapters_dir.empty())g_adapters_dir=g_models_dir+"/adapters";
+    if(g_adapters_dir.empty())g_adapters_dir=(std::filesystem::path(g_models_dir)/"adapters").string();
     g_adapters.discover(g_adapters_dir,"ac-musicgen-lora");
     httplib::Server server;
     g_adapters.routes(server);
