@@ -4,9 +4,10 @@
 [`betweentwomidnights/ggml`](https://github.com/betweentwomidnights/ggml), the fork shared
 with `sa3.cpp` and `acestep.cpp`.
 
-Current pin: `b77ae790e628270af46a8af1eca38441c23f1252`, the shared fork based on
-upstream GGML 0.27, replacing `60f49e09`. See [PR #7 validation](GGML_PR7_VALIDATION.md)
-for CUDA/Vulkan checks and the MelodyFlow F32 precision correction.
+Current pin: `e3db5210fe3ecdaa4d65b4c93d515f2cf15524b7`, the shared fork based on
+upstream GGML 0.29 ([betweentwomidnights/ggml#22](https://github.com/betweentwomidnights/ggml/pull/22)),
+replacing `b77ae790` (0.27). See [PR #7 validation](GGML_PR7_VALIDATION.md) for the 0.27
+CUDA/Vulkan checks and the MelodyFlow F32 precision correction.
 
 Historical backend correctness work: `f30f0cdc`
 ([betweentwomidnights/ggml#11](https://github.com/betweentwomidnights/ggml/pull/11)), which
@@ -214,7 +215,7 @@ git submodule update --init --recursive
 Read the pin from a checkout rather than trusting this file:
 
 ```bash
-git -C ggml rev-parse HEAD          # b77ae790...
+git -C ggml rev-parse HEAD          # e3db5210...
 git -C ggml log --oneline 19c5421c..HEAD
 ```
 
