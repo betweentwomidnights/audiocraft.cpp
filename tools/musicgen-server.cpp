@@ -7,8 +7,9 @@
 //   GET  /health
 //   GET  /api/models                     grouped by size, from what is on disk
 //   POST /api/juce/process_audio         continue from the *first* N seconds
-//   POST /api/juce/continue_music        continue from the *last* N seconds
-//   POST /api/juce/retry_music           the same input again, new parameters
+//   POST /api/juce/continue_music        continue from the *last* N seconds, and return
+//                                        the input with the continuation appended
+//   POST /api/juce/retry_music           the same continuation again, new parameters
 //   GET  /api/juce/poll_status/<id>      -> progress, then {audio_data} on completion
 //
 // One divergence, and it is the point of the exercise: `/api/models` reports the GGUFs
@@ -25,6 +26,7 @@
 #include "ac/codec.h"
 #include "ac/conditioner.h"
 #include "gguf_model.h"
+#include "mg/continuation.h"
 #include "mg/encodec.h"
 #include "mg/pipeline.h"
 #include "serve/http.h"
@@ -218,6 +220,9 @@ std::string run_generation(const GenerateRequest& req, const std::string& sessio
 
     std::vector<int32_t> prompt_codes;
     int prompt_len = 0, frame_rate = 50, sample_rate = 32000, channels = 1;
+    // A continuation returns the input with the new audio appended (mg/continuation.h).
+    std::vector<float> input;
+    int in_samples = 0, in_ch = 0, in_rate = 0;
     {
         ac::GgufModel codec = ac::load_gguf(
             req.codec.c_str(), ac::make_backend(0, g_device.empty() ? nullptr : g_device.c_str()));
@@ -228,6 +233,12 @@ std::string run_generation(const GenerateRequest& req, const std::string& sessio
 
         int n_samples = 0, n_ch = 0, rate = 0;
         std::vector<float> audio = decode_audio(req.audio_b64, n_samples, n_ch, rate);
+        if (!req.from_start) {
+            input = audio;
+            in_samples = n_samples;
+            in_ch = n_ch;
+            in_rate = rate;
+        }
         ac::conform_audio(audio, n_samples, n_ch, rate, c,
                           (int)(req.prompt_duration * c.frame_rate), !req.from_start);
         prompt_len = n_samples / c.hop_length;
@@ -268,11 +279,18 @@ std::string run_generation(const GenerateRequest& req, const std::string& sessio
     const std::vector<float> latent = ac::rvq_decode(books, codes, timesteps);
     int64_t out_samples = 0;
     std::vector<float> audio = ac::codec_decode(codec, c, latent, timesteps, out_samples);
+    int n_samples = (int)out_samples;
+    if (!req.from_start) {
+        audio = ac::append_continuation(input, in_samples, in_ch, in_rate, audio, n_samples,
+                                        channels, sample_rate, req.prompt_duration, n_samples,
+                                        channels);
+        sample_rate = in_rate;
+    }
     // Headroom, not loudness -- see ac::peak_normalize_if_clipping. gary does this in
-    // `save_audio_to_base64`, and without it the 16-bit conversion flattens every transient
-    // the decoder overshot on.
+    // `save_audio_to_base64`, after the input is joined back on, and without it the 16-bit
+    // conversion flattens every transient the decoder overshot on.
     ac::peak_normalize_if_clipping(audio);
-    return encode_audio(audio, (int)out_samples, channels, sample_rate);
+    return encode_audio(audio, n_samples, channels, sample_rate);
 }
 
 GenerateRequest parse_generate(const Json& body, bool from_start, const Session* previous = nullptr) {
