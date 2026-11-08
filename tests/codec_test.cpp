@@ -14,6 +14,7 @@
 //
 // Regenerate the fixtures with tests/gen_codec_fixture.py (needs gary's venv).
 #include "audio_post.h"
+#include "mg/continuation.h"
 #include "mg/encodec.h"
 
 #include <cmath>
@@ -2025,6 +2026,50 @@ int main() {
               disagreements, 1);
         std::printf("  torchaudio's length differs from the exact ceiling in %d of %d cases\n",
                     disagreements, LENGTH_CASES);
+    }
+
+    {
+        // continue_music returns the input up to the prompt, then the whole generated window.
+        // Stereo input at the codec's rate: every sample can be checked exactly.
+        const int in_n = 10, in_rate = 4, gen_n = 6;
+        std::vector<float> in((size_t)in_n * 2), gen((size_t)gen_n);
+        for (int s = 0; s < in_n; ++s) { in[(size_t)s] = (float)s; in[(size_t)in_n + s] = -(float)s; }
+        for (int s = 0; s < gen_n; ++s) gen[(size_t)s] = 100.0f + s;
+        int out_n = 0, out_ch = 0;
+        std::vector<float> out = ac::append_continuation(in, in_n, 2, in_rate, gen, gen_n, 1,
+                                                         in_rate, 1.0, out_n, out_ch);
+        // 1 s of prompt at 4 Hz is 4 samples: 6 kept + 6 generated.
+        check(out_n == 12, "continuation length", out_n, 12);
+        check(out_ch == 2, "continuation channels", out_ch, 2);
+        for (int s = 0; s < 6; ++s) {
+            check_close(out[(size_t)s], (float)s, 0.0f, "kept input left", s);
+            check_close(out[(size_t)out_n + s], -(float)s, 0.0f, "kept input right", s);
+        }
+        for (int s = 0; s < gen_n; ++s) {
+            check_close(out[(size_t)6 + s], 100.0f + s, 0.0f, "continuation left", s);
+            check_close(out[(size_t)out_n + 6 + s], 100.0f + s, 0.0f, "continuation right", s);
+        }
+
+        // Mono input is widened to stereo, as gary widens it before cutting.
+        std::vector<float> mono(in.begin(), in.begin() + in_n);
+        out = ac::append_continuation(mono, in_n, 1, in_rate, gen, gen_n, 1, in_rate, 1.0,
+                                      out_n, out_ch);
+        check(out_ch == 2, "mono input comes back stereo", out_ch, 2);
+        check_close(out[(size_t)out_n + 5], 5.0f, 0.0f, "widened input", 5);
+
+        // A prompt as long as the input keeps none of it.
+        out = ac::append_continuation(in, in_n, 2, in_rate, gen, gen_n, 1, in_rate, 3.0,
+                                      out_n, out_ch);
+        check(out_n == gen_n, "a prompt covering the input keeps none of it", out_n, gen_n);
+
+        // At another rate the generated window is resampled to the input's.
+        std::vector<float> wide((size_t)R44_SRC * 2 * 2, 0.25f);   // 2 s stereo at 44.1k
+        std::vector<float> window((size_t)R44_DST, 0.5f);           // 1 s at 32k
+        out = ac::append_continuation(wide, R44_SRC * 2, 2, R44_SRC, window, R44_DST, 1,
+                                      R44_DST, 1.0, out_n, out_ch);
+        const int want = R44_SRC + ac::resample_planar_sinc_length(R44_DST, R44_DST, R44_SRC);
+        check(out_n == want, "resampled continuation length", out_n, want);
+        check_close(out[(size_t)R44_SRC - 1], 0.25f, 0.0f, "last kept sample", R44_SRC - 1);
     }
 
     if (failures) {
