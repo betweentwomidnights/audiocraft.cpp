@@ -19,7 +19,7 @@ on:
         description: which packages to build (a release event always builds both)
         required: false
         type: choice
-        options: [all, windows, macos]
+        options: [all, windows, macos, linux]
         default: all
 
 permissions:
@@ -35,7 +35,7 @@ jobs:
     # generator by name. A runner image moving to a newer Visual Studio should
     # be a change made here on purpose, not one that turns up as a red release.
     runs-on: windows-2022
-    if: github.event_name == 'release' || inputs.platforms != 'macos'
+    if: github.event_name == 'release' || (inputs.platforms != 'macos' && inputs.platforms != 'linux')
     # Every CUDA architecture ggml's portable default covers is compiled, which
     # is most of this job's time.
     timeout-minutes: 240
@@ -151,7 +151,7 @@ jobs:
     name: macos-universal (metal + cpu)
     # macOS 15: its Rosetta runs the x86_64 slice's AVX2 code, so CI tests both slices.
     runs-on: macos-15
-    if: github.event_name == 'release' || inputs.platforms != 'windows'
+    if: github.event_name == 'release' || (inputs.platforms != 'windows' && inputs.platforms != 'linux')
     timeout-minutes: 90
     env:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
@@ -255,3 +255,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$TAG" dist/audiocraft-*-macos-universal.zip dist/SHA256SUMS-macos --clobber
+
+  linux:
+    name: Linux experimental packages
+    if: github.event_name == 'workflow_dispatch' && inputs.tag == '' && (inputs.platforms == 'all' || inputs.platforms == 'linux')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/linux-packaging.yml
