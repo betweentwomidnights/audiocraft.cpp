@@ -24,7 +24,3 @@ testdata/
 
 /dist/
 /dist-*/
-
-# Dedicated Linux package outputs
-/build-dist-linux*/
-/dist-linux*/
