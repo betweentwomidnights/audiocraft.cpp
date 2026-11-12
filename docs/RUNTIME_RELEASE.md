@@ -1,5 +1,7 @@
 # Audiocraft native runtime releases
 
+Experimental Linux core/CUDA/Vulkan builds: [Linux packaging](LINUX_PACKAGING.md).
+
 One `audiocraft` bundle serves both `musicgen-server` and `melodyflow-server`,
 analogous to SA3's shared SA3/SAT bundle. Model weights are not included.
 The downstream package contract is
