@@ -24,3 +24,6 @@ testdata/
 
 /dist/
 /dist-*/
+
+# Verified Linux release preparation
+dist-linux-preview/
