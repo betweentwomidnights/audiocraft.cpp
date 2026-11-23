@@ -15,7 +15,7 @@ The downstream package contract is
 | `audiocraft-vX.Y.Z-windows-x64-cuda.zip` | ggml-cuda.dll only |
 | `audiocraft-vX.Y.Z-windows-x64-vulkan.zip` | ggml-vulkan.dll only |
 | `audiocraft-vX.Y.Z-windows-x64-standalone.zip` | Core, both GPU backends, CUDA runtime DLLs and EULA |
-| `audiocraft-vX.Y.Z-macos-universal.zip` | Universal tools and ggml dylibs, arm64 Metal/CPU and x86_64 CPU, licenses and build metadata |
+| `audiocraft-vX.Y.Z-macos-universal.zip` | Universal tools and ggml dylibs, precompiled Metal libraries, arm64 Metal/CPU and x86_64 CPU, licenses and build metadata |
 
 Archives are flat. Gary4local installs core plus one GPU backend, and supplies
 its existing shared CUDA 12.8 runtime on PATH. Direct Windows users take the
